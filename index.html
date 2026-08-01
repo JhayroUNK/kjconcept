@@ -387,6 +387,21 @@
             </div>
           </div>
         </div>
+
+        <div class="card panel-card" style="margin-top:16px">
+          <div class="card-head">
+            <h3>Gastos</h3>
+            <button class="btn btn-secondary btn-sm" id="btnNuevoGasto">+ Nuevo gasto</button>
+          </div>
+          <p class="muted" style="margin:-8px 0 12px">Aquí registras gastos administrativos (publicidad, herramientas, pasajes, etc.). El pago al diseñador y la comisión de venta se calculan solos desde tus ventas — no hace falta anotarlos aquí, pero sí se suman al total de "Gastos" en todo el dashboard.</p>
+          <div class="table-wrap">
+            <table class="table" id="tablaGastos">
+              <thead><tr><th>Fecha</th><th>Descripción</th><th>Categoría</th><th>Monto</th><th></th></tr></thead>
+              <tbody id="tbodyGastos"></tbody>
+            </table>
+            <div class="empty-state" id="gastosEmptyState" style="display:none"><p>No hay gastos registrados.</p></div>
+          </div>
+        </div>
       </section>
 
       <!-- ============ HISTORIAL ============ -->
@@ -429,23 +444,9 @@
         <div class="card panel-card">
           <div class="card-head">
             <h3>Distribución del ingreso</h3>
-            <p class="muted">De todo lo que entra por ventas, esto es lo que corresponde separar para cada cosa antes de tocar la ganancia.</p>
+            <p class="muted">De todo lo que entra por ventas, esto es lo que corresponde separar para cada cosa antes de tocar la ganancia. El pago al diseñador y la comisión de venta se cuentan como gastos, porque son dinero que sale del negocio.</p>
           </div>
           <div id="distribucionBody"></div>
-        </div>
-
-        <div class="card panel-card">
-          <div class="card-head">
-            <h3>Gastos</h3>
-            <button class="btn btn-secondary btn-sm" id="btnNuevoGasto">+ Nuevo gasto</button>
-          </div>
-          <div class="table-wrap">
-            <table class="table" id="tablaGastos">
-              <thead><tr><th>Fecha</th><th>Descripción</th><th>Categoría</th><th>Monto</th><th></th></tr></thead>
-              <tbody id="tbodyGastos"></tbody>
-            </table>
-            <div class="empty-state" id="gastosEmptyState" style="display:none"><p>No hay gastos registrados.</p></div>
-          </div>
         </div>
 
         <div class="charts-grid">

@@ -284,10 +284,17 @@ const Calc = {
   // Valor del material perdido/dañado (merma), separado de los gastos generales del negocio
   mermaTotal(mesKey){ return this._byMonth(Store.getMermas(), mesKey).reduce((s,m)=>s+Number(m.costoTotal||0),0); },
   ventasTotales(mesKey){ return this._byMonth(Store.getVentas(), mesKey).reduce((s,v)=>s+Number(v.precioCobrado||0),0); },
-  // Suma la ganancia ya calculada de cada venta (precio - materiales - impresión - corte - mano de obra)
-  gananciaBruta(mesKey){ return this._byMonth(Store.getVentas(), mesKey).reduce((s,v)=>s+Number(v.ganancia||0),0); },
-  gastosTotales(mesKey){ return this._byMonth(Store.getGastos(), mesKey).reduce((s,g)=>s+Number(g.monto||0),0); },
-  // Ganancia bruta de las ventas, menos gastos generales, menos lo perdido en merma
+  // Comisión pagada a la vendedora — es dinero que sale del negocio, se cuenta como gasto
+  comisionTotal(mesKey){ return this._byMonth(Store.getVentas(), mesKey).reduce((s,v)=>s+Number(v.comision||0),0); },
+  // Gastos administrativos anotados a mano (publicidad, herramientas, pasajes, etc.)
+  gastosAdministrativos(mesKey){ return this._byMonth(Store.getGastos(), mesKey).reduce((s,g)=>s+Number(g.monto||0),0); },
+  // Ingreso menos el costo directo de producir (materiales + impresión/corte), ANTES de gastos.
+  // Mano de obra del diseñador y comisión de venta ya no se restan aquí: son gastos, no costo de producción.
+  gananciaBruta(mesKey){ return this.ventasTotales(mesKey) - this.materialConsumido(mesKey) - this.impresionCorteTotal(mesKey); },
+  // Gastos totales del negocio: lo que se paga al diseñador + la comisión de venta + los gastos
+  // administrativos anotados a mano. Todo esto es dinero que sale del negocio.
+  gastosTotales(mesKey){ return this.gastosAdministrativos(mesKey) + this.manoObraTotal(mesKey) + this.comisionTotal(mesKey); },
+  // Ganancia bruta, menos gastos (diseñador + comisión + administrativos), menos lo perdido en merma
   utilidadNeta(mesKey){ return this.gananciaBruta(mesKey) - this.gastosTotales(mesKey) - this.mermaTotal(mesKey); },
   capitalDisponible(){
     const cfg = Store.getConfig();
@@ -302,10 +309,12 @@ const Calc = {
     const materiales = this.materialConsumido(mesKey);
     const impresionCorte = this.impresionCorteTotal(mesKey);
     const manoObra = this.manoObraTotal(mesKey);
+    const comision = this.comisionTotal(mesKey);
+    const gastosAdmin = this.gastosAdministrativos(mesKey);
     const merma = this.mermaTotal(mesKey);
-    const gastos = this.gastosTotales(mesKey);
-    const gananciaNeta = ventas - materiales - impresionCorte - manoObra - merma - gastos;
-    return {ventas, materiales, impresionCorte, manoObra, merma, gastos, gananciaNeta};
+    const gastos = manoObra + comision + gastosAdmin;
+    const gananciaNeta = ventas - materiales - impresionCorte - gastos - merma;
+    return {ventas, materiales, impresionCorte, manoObra, comision, gastosAdmin, merma, gastos, gananciaNeta};
   },
   trabajosRealizados(mesKey){ return this._byMonth(Store.getVentas(), mesKey).length; },
   materialesEnInventario(){ return Store.getInventario().length; },
@@ -343,15 +352,26 @@ const Calc = {
     Store.getCompras().forEach(c => { const k = Utils.monthKey(c.fecha); if(k in map) map[k]+=Number(c.precioTotal||0); });
     return {labels: meses.map(Utils.monthLabel), data: meses.map(m=>map[m])};
   },
-  gastosPorMes(){
+  // Gastos administrativos + mano de obra del diseñador + comisión de venta, por mes (todo lo que se paga)
+  _gastosTotalesPorMesMap(){
     const meses = Utils.last6Months();
     const map = Object.fromEntries(meses.map(m=>[m,0]));
     Store.getGastos().forEach(g => { const k = Utils.monthKey(g.fecha); if(k in map) map[k]+=Number(g.monto||0); });
+    Store.getVentas().forEach(v => { const k = Utils.monthKey(v.fecha); if(k in map) map[k]+= Number(v.costoManoObra||0) + Number(v.comision||0); });
+    return map;
+  },
+  gastosPorMes(){
+    const map = this._gastosTotalesPorMesMap();
+    const meses = Utils.last6Months();
     return {labels: meses.map(Utils.monthLabel), data: meses.map(m=>map[m])};
   },
   gastosPorCategoria(){
     const map = {};
     Store.getGastos().forEach(g => { const c = g.categoria || 'Otros'; map[c] = (map[c]||0) + Number(g.monto||0); });
+    const manoObra = this.manoObraTotal();
+    const comision = this.comisionTotal();
+    if(manoObra > 0) map['Diseño (mano de obra)'] = (map['Diseño (mano de obra)']||0) + manoObra;
+    if(comision > 0) map['Comisión de venta'] = (map['Comisión de venta']||0) + comision;
     return {labels: Object.keys(map), data: Object.values(map)};
   },
   materialesMasUtilizados(){
@@ -368,10 +388,9 @@ const Calc = {
     const meses = Utils.last6Months();
     const ventas = Object.fromEntries(meses.map(m=>[m,0]));
     const compras = Object.fromEntries(meses.map(m=>[m,0]));
-    const gastos = Object.fromEntries(meses.map(m=>[m,0]));
+    const gastos = this._gastosTotalesPorMesMap(); // incluye admin + mano de obra + comisión
     Store.getVentas().forEach(v=>{ const k=Utils.monthKey(v.fecha); if(k in ventas) ventas[k]+=Number(v.precioCobrado||0); });
     Store.getCompras().forEach(c=>{ const k=Utils.monthKey(c.fecha); if(k in compras) compras[k]+=Number(c.precioTotal||0); });
-    Store.getGastos().forEach(g=>{ const k=Utils.monthKey(g.fecha); if(k in gastos) gastos[k]+=Number(g.monto||0); });
     return {
       labels: meses.map(Utils.monthLabel),
       ingresos: meses.map(m=>ventas[m]),
@@ -590,6 +609,8 @@ const DashboardView = {
     const manoObra = Calc.manoObraTotal(periodo);
     const impresionCorte = Calc.impresionCorteTotal(periodo);
     const merma = Calc.mermaTotal(periodo);
+    const comision = Calc.comisionTotal(periodo);
+    const gastosAdmin = Calc.gastosAdministrativos(periodo);
     const ventas = Calc.ventasTotales(periodo);
     const gBruta = Calc.gananciaBruta(periodo);
     const gastos = Calc.gastosTotales(periodo);
@@ -603,12 +624,14 @@ const DashboardView = {
       {label:'Compras'+sufijo, value: Utils.money(inv), tone:''},
       {label:'Valor actual del inventario', value: Utils.money(valInv), tone:'accent'},
       {label:'Material consumido'+sufijo, value: Utils.money(matCons), tone:''},
-      {label:'Mano de obra (diseñador)'+sufijo, value: Utils.money(manoObra), tone:''},
       {label:'Impresión y corte'+sufijo, value: Utils.money(impresionCorte), tone:''},
-      {label:'Merma'+sufijo, value: Utils.money(merma), tone: merma>0?'danger':''},
       {label:'Ventas'+sufijo, value: Utils.money(ventas), tone:'success'},
       {label:'Ganancia bruta'+sufijo, value: Utils.money(gBruta), tone: gBruta>=0?'success':'danger'},
-      {label:'Gastos'+sufijo, value: Utils.money(gastos), tone:'warning'},
+      {label:'Mano de obra (diseñador)'+sufijo, value: Utils.money(manoObra), tone:'warning'},
+      {label:'Comisión de venta'+sufijo, value: Utils.money(comision), tone:'warning'},
+      {label:'Gastos administrativos'+sufijo, value: Utils.money(gastosAdmin), tone:'warning'},
+      {label:'Gastos totales'+sufijo, value: Utils.money(gastos), tone:'warning'},
+      {label:'Merma'+sufijo, value: Utils.money(merma), tone: merma>0?'danger':''},
       {label:'Utilidad neta'+sufijo, value: Utils.money(uNeta), tone: uNeta>=0?'success':'danger', big:true},
       {label:'Capital disponible (actual)', value: Utils.money(capDisp), tone: capDisp>=0?'accent':'danger', big:true},
       {label:'Trabajos'+sufijo, value: trabajos, tone:''},
@@ -1160,6 +1183,7 @@ const ComprasView = {
   init(){
     document.getElementById('compraFecha').value = Utils.todayISO();
     document.getElementById('btnRegistrarCompra').onclick = ()=> this.registrar();
+    document.getElementById('btnNuevoGasto').onclick = ()=> this.openGastoForm();
     ['compraCantidad','compraPrecioTotal','compraMaterial'].forEach(id=>{
       document.getElementById(id).oninput = ()=> this.updatePreview();
     });
@@ -1260,6 +1284,57 @@ const ComprasView = {
         <td><button class="row-icon-btn danger" data-del="${c.id}" title="Eliminar">🗑</button></td>
       </tr>`).join('');
     tbody.querySelectorAll('[data-del]').forEach(b=> b.onclick = ()=> this.remove(b.dataset.del));
+    this.renderGastos();
+  },
+  renderGastos(){
+    const gastos = [...Store.getGastos()].sort((a,b)=> b.fecha.localeCompare(a.fecha));
+    const tbody = document.getElementById('tbodyGastos');
+    document.getElementById('gastosEmptyState').style.display = gastos.length? 'none':'block';
+    tbody.innerHTML = gastos.map(g=>`
+      <tr>
+        <td>${Utils.formatDate(g.fecha)}</td>
+        <td class="wrap">${Utils.escapeHtml(g.descripcion)}</td>
+        <td><span class="tag">${Utils.escapeHtml(g.categoria)}</span></td>
+        <td>${Utils.money(g.monto)}</td>
+        <td><button class="row-icon-btn danger" data-del="${g.id}">🗑</button></td>
+      </tr>`).join('');
+    tbody.querySelectorAll('[data-del]').forEach(b=> b.onclick = ()=>{
+      Modal.confirm('¿Eliminar este gasto?', ()=>{
+        Store.setGastos(Store.getGastos().filter(g=>g.id!==b.dataset.del));
+        Toast.show('success','Gasto eliminado.');
+        this.renderGastos();
+        App.refreshBadges();
+      });
+    });
+  },
+  openGastoForm(){
+    const categoriasGasto = ['Publicidad','Gasolina','Pasajes / Movilidad','Delivery','Empaques','Luz','Internet','Herramientas','Mantenimiento','Inversión en máquinas','Otros'];
+    Modal.open({
+      title:'Nuevo gasto',
+      bodyHtml: `
+        <div class="field"><label>Fecha</label><input type="date" id="gFecha" value="${Utils.todayISO()}"></div>
+        <div class="field"><label>Descripción</label><input type="text" id="gDesc" placeholder="Ej. Publicidad en Instagram"></div>
+        <div class="field"><label>Categoría</label><select id="gCategoria">${categoriasGasto.map(c=>`<option>${c}</option>`).join('')}</select></div>
+        <div class="field"><label>Monto</label><input type="number" step="0.01" id="gMonto" placeholder="0.00"></div>
+        <div class="field"><label>Observaciones</label><input type="text" id="gObs" placeholder="Opcional"></div>
+      `,
+      footButtons: [
+        {label:'Cancelar', className:'btn-ghost', onClick: ()=>Modal.close()},
+        {label:'Guardar gasto', className:'btn-primary', onClick: ()=>{
+          const monto = Number(document.getElementById('gMonto').value);
+          const desc = document.getElementById('gDesc').value.trim();
+          if(!desc){ Toast.show('warning','Escribe una descripción.'); return; }
+          if(!monto || monto<=0){ Toast.show('warning','Ingresa un monto válido.'); return; }
+          const gastos = Store.getGastos();
+          gastos.push({id:Utils.uid(), fecha: document.getElementById('gFecha').value||Utils.todayISO(), descripcion: desc, categoria: document.getElementById('gCategoria').value, monto, observaciones: document.getElementById('gObs').value.trim()});
+          Store.setGastos(gastos);
+          Toast.show('success','Gasto registrado.');
+          Modal.close();
+          this.renderGastos();
+          App.refreshBadges();
+        }}
+      ]
+    });
   },
   remove(id){
     const compra = Store.getCompras().find(c=>c.id===id);
@@ -1657,7 +1732,6 @@ const HistorialView = {
 const FinanzasView = {
   init(){
     document.getElementById('btnGuardarCapital').onclick = ()=> this.saveCapital();
-    document.getElementById('btnNuevoGasto').onclick = ()=> this.openGastoForm();
     document.getElementById('btnExportInventario').onclick = ()=> Exporter.inventario();
     document.getElementById('btnExportVentas').onclick = ()=> Exporter.ventas();
     document.getElementById('btnExportFinanzas').onclick = ()=> Exporter.finanzas();
@@ -1680,7 +1754,6 @@ const FinanzasView = {
     this.renderKpis();
     this.renderEstado();
     this.renderDistribucion();
-    this.renderGastos();
     Charts.renderAll();
   },
   saveCapital(){
@@ -1698,10 +1771,12 @@ const FinanzasView = {
       {label:'Dinero recuperado', value: Utils.money(Calc.ventasTotales())},
       {label:'Dinero aún invertido (inventario)', value: Utils.money(Calc.valorInventarioActual())},
       {label:'Material consumido', value: Utils.money(Calc.materialConsumido())},
-      {label:'Mano de obra (diseñador)', value: Utils.money(Calc.manoObraTotal())},
       {label:'Impresión y corte (impresora/cameo)', value: Utils.money(Calc.impresionCorteTotal())},
       {label:'Merma (material dañado/perdido)', value: Utils.money(Calc.mermaTotal()), tone: Calc.mermaTotal()>0?'danger':''},
-      {label:'Gastos totales', value: Utils.money(Calc.gastosTotales())},
+      {label:'Mano de obra (diseñador)', value: Utils.money(Calc.manoObraTotal()), tone:'warning'},
+      {label:'Comisión de venta', value: Utils.money(Calc.comisionTotal()), tone:'warning'},
+      {label:'Gastos administrativos', value: Utils.money(Calc.gastosAdministrativos()), tone:'warning'},
+      {label:'Gastos totales (diseñador + comisión + administrativos)', value: Utils.money(Calc.gastosTotales()), tone:'warning'},
       {label:'Utilidad neta', value: Utils.money(Calc.utilidadNeta()), tone: Calc.utilidadNeta()>=0?'success':'danger'},
       {label:'Capital disponible para reinvertir', value: Utils.money(Calc.capitalDisponible()), tone:'accent', big:true}
     ];
@@ -1737,9 +1812,10 @@ const FinanzasView = {
     const rows = [
       {label:'Materiales', hint:'para reponer stock de insumos', value:d.materiales, color:'var(--accent)'},
       {label:'Impresión y corte', hint:'mantenimiento/insumos de impresora y cameo', value:d.impresionCorte, color:'var(--teal)'},
-      {label:'Mano de obra', hint:'lo que le corresponde al diseñador', value:d.manoObra, color:'var(--pink)'},
       {label:'Merma', hint:'material dañado o perdido', value:d.merma, color:'var(--warning)'},
-      {label:'Otros gastos', hint:'publicidad, herramientas, inversión en máquinas, pasajes, etc.', value:d.gastos, color:'var(--danger)'}
+      {label:'Mano de obra (gasto)', hint:'lo que se le paga al diseñador', value:d.manoObra, color:'var(--pink)'},
+      {label:'Comisión de venta (gasto)', hint:'lo que se le paga a la vendedora', value:d.comision, color:'var(--pink)'},
+      {label:'Gastos administrativos', hint:'publicidad, herramientas, inversión en máquinas, pasajes, etc.', value:d.gastosAdmin, color:'var(--danger)'}
     ];
     body.innerHTML = rows.map(r=>`
       <div class="dist-row">
@@ -1749,6 +1825,12 @@ const FinanzasView = {
         </div>
         <div class="dist-bar-track"><div class="dist-bar-fill" style="width:${pct(r.value)}%; background:${r.color}"></div></div>
       </div>`).join('') + `
+      <div class="dist-row">
+        <div class="dist-row-top">
+          <span class="dist-row-label">Gastos totales<span class="dist-row-hint">diseñador + comisión + administrativos</span></span>
+          <span class="dist-row-right"><span class="dist-row-pct">${pct(d.gastos).toFixed(0)}%</span><span class="dist-row-value">${Utils.money(d.gastos)}</span></span>
+        </div>
+      </div>
       <div class="dist-row total">
         <div class="dist-row-top">
           <span class="dist-row-label">Ganancia neta del negocio<span class="dist-row-hint">lo que realmente te queda, sobre ${Utils.money(d.ventas)} vendidos</span></span>
@@ -1756,56 +1838,6 @@ const FinanzasView = {
         </div>
         <div class="dist-bar-track"><div class="dist-bar-fill" style="width:${pct(d.gananciaNeta)}%; background:${d.gananciaNeta>=0?'var(--success)':'var(--danger)'}"></div></div>
       </div>`;
-  },
-  renderGastos(){
-    const gastos = [...Store.getGastos()].sort((a,b)=> b.fecha.localeCompare(a.fecha));
-    const tbody = document.getElementById('tbodyGastos');
-    document.getElementById('gastosEmptyState').style.display = gastos.length? 'none':'block';
-    tbody.innerHTML = gastos.map(g=>`
-      <tr>
-        <td>${Utils.formatDate(g.fecha)}</td>
-        <td class="wrap">${Utils.escapeHtml(g.descripcion)}</td>
-        <td><span class="tag">${Utils.escapeHtml(g.categoria)}</span></td>
-        <td>${Utils.money(g.monto)}</td>
-        <td><button class="row-icon-btn danger" data-del="${g.id}">🗑</button></td>
-      </tr>`).join('');
-    tbody.querySelectorAll('[data-del]').forEach(b=> b.onclick = ()=>{
-      Modal.confirm('¿Eliminar este gasto?', ()=>{
-        Store.setGastos(Store.getGastos().filter(g=>g.id!==b.dataset.del));
-        Toast.show('success','Gasto eliminado.');
-        this.render();
-        App.refreshBadges();
-      });
-    });
-  },
-  openGastoForm(){
-    const categoriasGasto = ['Publicidad','Gasolina','Pasajes / Movilidad','Delivery','Empaques','Luz','Internet','Herramientas','Mantenimiento','Inversión en máquinas','Otros'];
-    Modal.open({
-      title:'Nuevo gasto',
-      bodyHtml: `
-        <div class="field"><label>Fecha</label><input type="date" id="gFecha" value="${Utils.todayISO()}"></div>
-        <div class="field"><label>Descripción</label><input type="text" id="gDesc" placeholder="Ej. Publicidad en Instagram"></div>
-        <div class="field"><label>Categoría</label><select id="gCategoria">${categoriasGasto.map(c=>`<option>${c}</option>`).join('')}</select></div>
-        <div class="field"><label>Monto</label><input type="number" step="0.01" id="gMonto" placeholder="0.00"></div>
-        <div class="field"><label>Observaciones</label><input type="text" id="gObs" placeholder="Opcional"></div>
-      `,
-      footButtons: [
-        {label:'Cancelar', className:'btn-ghost', onClick: ()=>Modal.close()},
-        {label:'Guardar gasto', className:'btn-primary', onClick: ()=>{
-          const monto = Number(document.getElementById('gMonto').value);
-          const desc = document.getElementById('gDesc').value.trim();
-          if(!desc){ Toast.show('warning','Escribe una descripción.'); return; }
-          if(!monto || monto<=0){ Toast.show('warning','Ingresa un monto válido.'); return; }
-          const gastos = Store.getGastos();
-          gastos.push({id:Utils.uid(), fecha: document.getElementById('gFecha').value||Utils.todayISO(), descripcion: desc, categoria: document.getElementById('gCategoria').value, monto, observaciones: document.getElementById('gObs').value.trim()});
-          Store.setGastos(gastos);
-          Toast.show('success','Gasto registrado.');
-          Modal.close();
-          this.render();
-          App.refreshBadges();
-        }}
-      ]
-    });
   }
 };
 
@@ -1903,11 +1935,13 @@ const Exporter = {
       'Inversion Total': Calc.inversionTotal(),
       'Valor Inventario Actual': Calc.valorInventarioActual(),
       'Material Consumido': Calc.materialConsumido(),
-      'Mano de Obra (Diseñador)': Calc.manoObraTotal(),
       'Impresion y Corte': Calc.impresionCorteTotal(),
       'Merma': Calc.mermaTotal(),
       'Ventas Totales': Calc.ventasTotales(),
       'Ganancia Bruta': Calc.gananciaBruta(),
+      'Mano de Obra (Diseñador)': Calc.manoObraTotal(),
+      'Comision de Venta': Calc.comisionTotal(),
+      'Gastos Administrativos': Calc.gastosAdministrativos(),
       'Gastos Totales': Calc.gastosTotales(),
       'Utilidad Neta': Calc.utilidadNeta(),
       'Capital Disponible': Calc.capitalDisponible(),
