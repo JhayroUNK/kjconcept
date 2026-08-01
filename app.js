@@ -1,0 +1,1251 @@
+/* ==========================================================================
+   KJ CONCEPT — app.js
+   Vanilla JS ES6+. No frameworks. Everything persists in LocalStorage.
+   Modules: Utils, Store, Calc, Toast, Modal, Charts, Views, Nav, Export, App
+   ========================================================================== */
+'use strict';
+
+/* ---------------------------------------------------------------------- */
+/* UTILS                                                                   */
+/* ---------------------------------------------------------------------- */
+const Utils = {
+  uid(){ return 'id_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8); },
+  todayISO(){ return new Date().toISOString().slice(0,10); },
+  monthKey(dateStr){ return (dateStr||'').slice(0,7); }, // YYYY-MM
+  money(n){
+    const cfg = Store.getConfig();
+    const val = Number(n)||0;
+    return `${cfg.moneda} ${val.toLocaleString('es-PE', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
+  },
+  num(n, dec=2){ return (Number(n)||0).toLocaleString('es-PE', {minimumFractionDigits:dec, maximumFractionDigits:dec}); },
+  pct(n){ return `${(Number(n)||0).toFixed(0)}%`; },
+  formatDate(d){
+    if(!d) return '—';
+    const dt = new Date(d + 'T00:00:00');
+    if(isNaN(dt)) return d;
+    return dt.toLocaleDateString('es-PE', {day:'2-digit', month:'short', year:'numeric'});
+  },
+  monthLabel(key){
+    const [y,m] = key.split('-');
+    const dt = new Date(Number(y), Number(m)-1, 1);
+    return dt.toLocaleDateString('es-PE', {month:'short', year:'2-digit'});
+  },
+  last6Months(){
+    const arr = [];
+    const now = new Date();
+    for(let i=5;i>=0;i--){
+      const d = new Date(now.getFullYear(), now.getMonth()-i, 1);
+      arr.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`);
+    }
+    return arr;
+  },
+  debounce(fn, ms=250){
+    let t;
+    return (...args)=>{ clearTimeout(t); t = setTimeout(()=>fn(...args), ms); };
+  },
+  escapeHtml(str){
+    return String(str??'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+};
+
+/* ---------------------------------------------------------------------- */
+/* STORE — LocalStorage persistence layer                                 */
+/* ---------------------------------------------------------------------- */
+const KEYS = {
+  inventario: 'kj_inventario',
+  compras: 'kj_compras',
+  ventas: 'kj_ventas',
+  gastos: 'kj_gastos',
+  config: 'kj_configuracion'
+};
+
+const Store = {
+  _read(key, fallback){
+    try{
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : fallback;
+    }catch(e){ console.error('Store read error', key, e); return fallback; }
+  },
+  _write(key, value){
+    try{ localStorage.setItem(key, JSON.stringify(value)); return true; }
+    catch(e){ console.error('Store write error', key, e); Toast.show('error','No se pudo guardar. Almacenamiento lleno o bloqueado.'); return false; }
+  },
+
+  ensureDefaults(){
+    if(!localStorage.getItem(KEYS.config)){
+      this._write(KEYS.config, {
+        nombreNegocio: 'KJ Concept',
+        moneda: 'S/.',
+        tema: 'light',
+        categorias: ['Vinil','Papel Fotográfico','Imantado','Laminado','Empaque','Otros'],
+        unidades: ['hojas','m','unid.','kg','rollo'],
+        stockMinimoDefault: 10,
+        capitalInicial: 0
+      });
+    }
+    if(!localStorage.getItem(KEYS.inventario)) this._write(KEYS.inventario, []);
+    if(!localStorage.getItem(KEYS.compras)) this._write(KEYS.compras, []);
+    if(!localStorage.getItem(KEYS.ventas)) this._write(KEYS.ventas, []);
+    if(!localStorage.getItem(KEYS.gastos)) this._write(KEYS.gastos, []);
+  },
+
+  getConfig(){ return this._read(KEYS.config, {}); },
+  setConfig(cfg){ return this._write(KEYS.config, cfg); },
+
+  getInventario(){ return this._read(KEYS.inventario, []); },
+  setInventario(arr){ return this._write(KEYS.inventario, arr); },
+
+  getCompras(){ return this._read(KEYS.compras, []); },
+  setCompras(arr){ return this._write(KEYS.compras, arr); },
+
+  getVentas(){ return this._read(KEYS.ventas, []); },
+  setVentas(arr){ return this._write(KEYS.ventas, arr); },
+
+  getGastos(){ return this._read(KEYS.gastos, []); },
+  setGastos(arr){ return this._write(KEYS.gastos, arr); },
+
+  resetAll(){
+    Object.values(KEYS).forEach(k => localStorage.removeItem(k));
+    this.ensureDefaults();
+  },
+
+  backupJSON(){
+    return {
+      exportadoEn: new Date().toISOString(),
+      configuracion: this.getConfig(),
+      inventario: this.getInventario(),
+      compras: this.getCompras(),
+      ventas: this.getVentas(),
+      gastos: this.getGastos()
+    };
+  },
+  restoreJSON(data){
+    if(!data || typeof data !== 'object') throw new Error('Archivo inválido');
+    if(data.configuracion) this.setConfig(data.configuracion);
+    if(Array.isArray(data.inventario)) this.setInventario(data.inventario);
+    if(Array.isArray(data.compras)) this.setCompras(data.compras);
+    if(Array.isArray(data.ventas)) this.setVentas(data.ventas);
+    if(Array.isArray(data.gastos)) this.setGastos(data.gastos);
+  }
+};
+
+/* ---------------------------------------------------------------------- */
+/* CALC — all derived business metrics (never store computed values)      */
+/* ---------------------------------------------------------------------- */
+const Calc = {
+  inversionTotal(){ return Store.getCompras().reduce((s,c)=>s+Number(c.precioTotal||0),0); },
+  valorInventarioActual(){ return Store.getInventario().reduce((s,m)=>s+ (Number(m.cantidad||0) * Number(m.costoPromedio||0)),0); },
+  materialConsumido(){ return Store.getVentas().reduce((s,v)=>s+Number(v.costoTotalMateriales||0),0); },
+  ventasTotales(){ return Store.getVentas().reduce((s,v)=>s+Number(v.precioCobrado||0),0); },
+  gananciaBruta(){ return this.ventasTotales() - this.materialConsumido(); },
+  gastosTotales(){ return Store.getGastos().reduce((s,g)=>s+Number(g.monto||0),0); },
+  utilidadNeta(){ return this.gananciaBruta() - this.gastosTotales(); },
+  capitalDisponible(){
+    const cfg = Store.getConfig();
+    return Number(cfg.capitalInicial||0) + this.ventasTotales() - this.inversionTotal() - this.gastosTotales();
+  },
+  trabajosRealizados(){ return Store.getVentas().length; },
+  materialesEnInventario(){ return Store.getInventario().length; },
+  materialesStockBajo(){ return Store.getInventario().filter(m => Number(m.cantidad) <= Number(m.stockMinimo||0)); },
+  recuperacionPct(){
+    const inv = this.inversionTotal();
+    if(inv <= 0) return 100;
+    return Math.min(100, (this.ventasTotales() / inv) * 100);
+  },
+  estadoFinanciero(){
+    const u = this.utilidadNeta();
+    if(u > 0) return 'ganancias';
+    if(u === 0) return 'equilibrio';
+    return 'rojo';
+  },
+  margen(precio, costo){
+    if(!precio) return 0;
+    return ((precio - costo) / precio) * 100;
+  },
+  ventasPorMes(){
+    const meses = Utils.last6Months();
+    const map = Object.fromEntries(meses.map(m=>[m,0]));
+    Store.getVentas().forEach(v => { const k = Utils.monthKey(v.fecha); if(k in map) map[k]+=Number(v.precioCobrado||0); });
+    return {labels: meses.map(Utils.monthLabel), data: meses.map(m=>map[m])};
+  },
+  gananciasPorMes(){
+    const meses = Utils.last6Months();
+    const map = Object.fromEntries(meses.map(m=>[m,0]));
+    Store.getVentas().forEach(v => { const k = Utils.monthKey(v.fecha); if(k in map) map[k]+=Number(v.ganancia||0); });
+    return {labels: meses.map(Utils.monthLabel), data: meses.map(m=>map[m])};
+  },
+  comprasPorMes(){
+    const meses = Utils.last6Months();
+    const map = Object.fromEntries(meses.map(m=>[m,0]));
+    Store.getCompras().forEach(c => { const k = Utils.monthKey(c.fecha); if(k in map) map[k]+=Number(c.precioTotal||0); });
+    return {labels: meses.map(Utils.monthLabel), data: meses.map(m=>map[m])};
+  },
+  gastosPorMes(){
+    const meses = Utils.last6Months();
+    const map = Object.fromEntries(meses.map(m=>[m,0]));
+    Store.getGastos().forEach(g => { const k = Utils.monthKey(g.fecha); if(k in map) map[k]+=Number(g.monto||0); });
+    return {labels: meses.map(Utils.monthLabel), data: meses.map(m=>map[m])};
+  },
+  gastosPorCategoria(){
+    const map = {};
+    Store.getGastos().forEach(g => { const c = g.categoria || 'Otros'; map[c] = (map[c]||0) + Number(g.monto||0); });
+    return {labels: Object.keys(map), data: Object.values(map)};
+  },
+  materialesMasUtilizados(){
+    const map = {};
+    Store.getVentas().forEach(v => (v.materiales||[]).forEach(m => { map[m.nombre] = (map[m.nombre]||0) + Number(m.cantidad||0); }));
+    const entries = Object.entries(map).sort((a,b)=>b[1]-a[1]).slice(0,6);
+    return {labels: entries.map(e=>e[0]), data: entries.map(e=>e[1])};
+  },
+  stockMasBajo(){
+    const inv = [...Store.getInventario()].sort((a,b)=> (Number(a.cantidad)/(Number(a.stockMinimo)||1)) - (Number(b.cantidad)/(Number(b.stockMinimo)||1))).slice(0,6);
+    return {labels: inv.map(m=>m.nombre), data: inv.map(m=>Number(m.cantidad))};
+  },
+  flujoCajaPorMes(){
+    const meses = Utils.last6Months();
+    const ventas = Object.fromEntries(meses.map(m=>[m,0]));
+    const compras = Object.fromEntries(meses.map(m=>[m,0]));
+    const gastos = Object.fromEntries(meses.map(m=>[m,0]));
+    Store.getVentas().forEach(v=>{ const k=Utils.monthKey(v.fecha); if(k in ventas) ventas[k]+=Number(v.precioCobrado||0); });
+    Store.getCompras().forEach(c=>{ const k=Utils.monthKey(c.fecha); if(k in compras) compras[k]+=Number(c.precioTotal||0); });
+    Store.getGastos().forEach(g=>{ const k=Utils.monthKey(g.fecha); if(k in gastos) gastos[k]+=Number(g.monto||0); });
+    return {
+      labels: meses.map(Utils.monthLabel),
+      ingresos: meses.map(m=>ventas[m]),
+      salidas: meses.map(m=>compras[m]+gastos[m]),
+      saldo: meses.map(m=> ventas[m] - compras[m] - gastos[m])
+    };
+  },
+  evolucionInventario(){
+    // approximate cumulative inventory value using compras (add) minus material consumido cumulative (rough)
+    const meses = Utils.last6Months();
+    const compras = Object.fromEntries(meses.map(m=>[m,0]));
+    Store.getCompras().forEach(c=>{ const k=Utils.monthKey(c.fecha); if(k in compras) compras[k]+=Number(c.precioTotal||0); });
+    let running = 0;
+    const data = meses.map(m => { running += compras[m]; return running; });
+    return {labels: meses.map(Utils.monthLabel), data};
+  }
+};
+
+/* ---------------------------------------------------------------------- */
+/* TOAST                                                                   */
+/* ---------------------------------------------------------------------- */
+const Toast = {
+  icons: {success:'✓', error:'⚠', warning:'!', info:'ℹ'},
+  show(type, msg, timeout=3800){
+    const c = document.getElementById('toastContainer');
+    const el = document.createElement('div');
+    el.className = `toast ${type}`;
+    el.innerHTML = `<span class="toast-ico">${this.icons[type]||this.icons.info}</span><span>${Utils.escapeHtml(msg)}</span><button class="toast-close">✕</button>`;
+    el.querySelector('.toast-close').onclick = ()=> el.remove();
+    c.appendChild(el);
+    setTimeout(()=>{ el.style.opacity='0'; el.style.transform='translateX(24px)'; setTimeout(()=>el.remove(),250); }, timeout);
+  }
+};
+
+/* ---------------------------------------------------------------------- */
+/* MODAL                                                                   */
+/* ---------------------------------------------------------------------- */
+const Modal = {
+  open({title, bodyHtml, footButtons=[], onMount}){
+    this.close();
+    const root = document.getElementById('modalRoot');
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal-box" role="dialog" aria-modal="true">
+        <div class="modal-head"><h3>${Utils.escapeHtml(title)}</h3><button class="modal-close" id="modalCloseBtn">✕</button></div>
+        <div class="modal-body">${bodyHtml}</div>
+        <div class="modal-foot" id="modalFoot"></div>
+      </div>`;
+    root.appendChild(overlay);
+    overlay.addEventListener('mousedown', (e)=>{ if(e.target === overlay) this.close(); });
+    overlay.querySelector('#modalCloseBtn').onclick = ()=> this.close();
+    const foot = overlay.querySelector('#modalFoot');
+    footButtons.forEach(b=>{
+      const btn = document.createElement('button');
+      btn.className = `btn ${b.className||'btn-secondary'}`;
+      btn.textContent = b.label;
+      btn.onclick = b.onClick;
+      foot.appendChild(btn);
+    });
+    if(onMount) onMount(overlay);
+    this._esc = (e)=>{ if(e.key==='Escape') this.close(); };
+    document.addEventListener('keydown', this._esc);
+  },
+  close(){
+    const root = document.getElementById('modalRoot');
+    root.innerHTML = '';
+    if(this._esc) document.removeEventListener('keydown', this._esc);
+  },
+  confirm(message, onConfirm, title='¿Confirmar acción?'){
+    this.open({
+      title,
+      bodyHtml: `<p class="confirm-text">${Utils.escapeHtml(message)}</p>`,
+      footButtons: [
+        {label:'Cancelar', className:'btn-ghost', onClick: ()=> this.close()},
+        {label:'Eliminar', className:'btn-danger', onClick: ()=>{ onConfirm(); this.close(); }}
+      ]
+    });
+  }
+};
+
+/* ---------------------------------------------------------------------- */
+/* CHARTS                                                                  */
+/* ---------------------------------------------------------------------- */
+const Charts = {
+  _instances: {},
+  _themeColors(){
+    const styles = getComputedStyle(document.documentElement);
+    return {
+      text: styles.getPropertyValue('--text-dim').trim() || '#736C88',
+      grid: styles.getPropertyValue('--border-soft').trim() || '#F0ECF9',
+      accent: styles.getPropertyValue('--accent').trim() || '#7C4DFF',
+      success: styles.getPropertyValue('--success').trim() || '#17B893',
+      warning: styles.getPropertyValue('--warning').trim() || '#FBA834',
+      danger: styles.getPropertyValue('--danger').trim() || '#F0483F',
+      pink: styles.getPropertyValue('--pink').trim() || '#F0398F',
+      teal: styles.getPropertyValue('--teal').trim() || '#12BFC2',
+      orange: styles.getPropertyValue('--orange').trim() || '#FBA834'
+    };
+  },
+  _baseOptions(colors){
+    return {
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{ labels:{ color: colors.text, font:{family:"'Plus Jakarta Sans'", size:11} } } },
+      scales:{
+        x:{ ticks:{ color: colors.text, font:{size:10.5} }, grid:{ color:'transparent' } },
+        y:{ ticks:{ color: colors.text, font:{size:10.5} }, grid:{ color: colors.grid } }
+      }
+    };
+  },
+  _make(id, config){
+    const ctx = document.getElementById(id);
+    if(!ctx) return;
+    if(this._instances[id]) this._instances[id].destroy();
+    this._instances[id] = new Chart(ctx, config);
+  },
+  renderAll(){
+    const colors = this._themeColors();
+    const base = this._baseOptions(colors);
+
+    const vm = Calc.ventasPorMes();
+    this._make('chartVentasMes', {type:'bar', data:{labels:vm.labels, datasets:[{label:'Ventas', data:vm.data, backgroundColor: colors.accent, borderRadius:6}]}, options:{...base, plugins:{legend:{display:false}}}});
+
+    const gm = Calc.gananciasPorMes();
+    this._make('chartGananciasMes', {type:'line', data:{labels:gm.labels, datasets:[{label:'Ganancia', data:gm.data, borderColor: colors.success, backgroundColor: 'transparent', tension:.35, pointRadius:3}]}, options:{...base, plugins:{legend:{display:false}}}});
+
+    const fc = Calc.flujoCajaPorMes();
+    this._make('chartIngresosGastos', {type:'bar', data:{labels:fc.labels, datasets:[
+      {label:'Ingresos', data:fc.ingresos, backgroundColor: colors.success, borderRadius:6},
+      {label:'Gastos+Compras', data:fc.salidas, backgroundColor: colors.danger, borderRadius:6}
+    ]}, options:base});
+
+    const mu = Calc.materialesMasUtilizados();
+    this._make('chartMaterialesUsados', {type:'bar', data:{labels:mu.labels, datasets:[{label:'Cantidad usada', data:mu.data, backgroundColor: colors.accent, borderRadius:6}]}, options:{...base, indexAxis:'y', plugins:{legend:{display:false}}}});
+
+    const gc = Calc.gastosPorCategoria();
+    this._make('chartGastosCategoria', {type:'doughnut', data:{labels:gc.labels.length?gc.labels:['Sin datos'], datasets:[{data:gc.data.length?gc.data:[1], backgroundColor:[colors.accent,colors.pink,colors.teal,colors.orange,colors.success,colors.danger]}]}, options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{position:'right', labels:{color:colors.text, font:{size:10.5}}}}}});
+
+    const sb = Calc.stockMasBajo();
+    this._make('chartStockBajo', {type:'bar', data:{labels:sb.labels, datasets:[{label:'Cantidad', data:sb.data, backgroundColor: colors.warning, borderRadius:6}]}, options:{...base, indexAxis:'y', plugins:{legend:{display:false}}}});
+
+    if(document.getElementById('chartFlujoCaja')){
+      this._make('chartFlujoCaja', {type:'line', data:{labels:fc.labels, datasets:[{label:'Saldo neto', data:fc.saldo, borderColor: colors.accent, backgroundColor:'transparent', tension:.35, pointRadius:3}]}, options:{...base, plugins:{legend:{display:false}}}});
+    }
+    if(document.getElementById('chartEvolInventario')){
+      const ei = Calc.evolucionInventario();
+      this._make('chartEvolInventario', {type:'line', data:{labels:ei.labels, datasets:[{label:'Inventario acumulado', data:ei.data, borderColor: colors.success, backgroundColor:'rgba(74,222,128,0.12)', fill:true, tension:.35}]}, options:{...base, plugins:{legend:{display:false}}}});
+    }
+    if(document.getElementById('chartRecuperacion')){
+      const pct = Calc.recuperacionPct();
+      this._make('chartRecuperacion', {type:'doughnut', data:{labels:['Recuperado','Pendiente'], datasets:[{data:[pct, Math.max(0,100-pct)], backgroundColor:[colors.success, colors.grid], borderWidth:0}]}, options:{responsive:true, maintainAspectRatio:false, cutout:'72%', plugins:{legend:{display:false}}}});
+    }
+    if(document.getElementById('chartComprasMes')){
+      const cm = Calc.comprasPorMes();
+      this._make('chartComprasMes', {type:'bar', data:{labels:cm.labels, datasets:[{label:'Compras', data:cm.data, backgroundColor: colors.danger, borderRadius:6}]}, options:{...base, plugins:{legend:{display:false}}}});
+    }
+  }
+};
+
+/* ---------------------------------------------------------------------- */
+/* VIEWS — DASHBOARD                                                       */
+/* ---------------------------------------------------------------------- */
+const DashboardView = {
+  render(){
+    const skel = document.getElementById('dashboardSkeleton');
+    const content = document.getElementById('dashboardContent');
+    skel.innerHTML = Array.from({length:8}).map(()=>'<div class="skeleton"></div>').join('');
+    skel.style.display = 'grid';
+    content.style.display = 'none';
+
+    setTimeout(()=>{
+      this._renderKpis();
+      this._renderRecovery();
+      this._renderEstado();
+      Charts.renderAll();
+      skel.style.display = 'none';
+      content.style.display = 'block';
+    }, 260);
+  },
+  _renderKpis(){
+    const grid = document.getElementById('kpiGrid');
+    const inv = Calc.inversionTotal();
+    const valInv = Calc.valorInventarioActual();
+    const matCons = Calc.materialConsumido();
+    const ventas = Calc.ventasTotales();
+    const gBruta = Calc.gananciaBruta();
+    const gastos = Calc.gastosTotales();
+    const uNeta = Calc.utilidadNeta();
+    const capDisp = Calc.capitalDisponible();
+    const trabajos = Calc.trabajosRealizados();
+    const numMat = Calc.materialesEnInventario();
+    const stockBajo = Calc.materialesStockBajo().length;
+
+    const cards = [
+      {label:'Inversión total', value: Utils.money(inv), tone:''},
+      {label:'Valor actual del inventario', value: Utils.money(valInv), tone:'accent'},
+      {label:'Material consumido', value: Utils.money(matCons), tone:''},
+      {label:'Ventas totales', value: Utils.money(ventas), tone:'success'},
+      {label:'Ganancia bruta', value: Utils.money(gBruta), tone: gBruta>=0?'success':'danger'},
+      {label:'Gastos totales', value: Utils.money(gastos), tone:'warning'},
+      {label:'Utilidad neta', value: Utils.money(uNeta), tone: uNeta>=0?'success':'danger', big:true},
+      {label:'Capital disponible', value: Utils.money(capDisp), tone: capDisp>=0?'accent':'danger', big:true},
+      {label:'Trabajos realizados', value: trabajos, tone:''},
+      {label:'Materiales en inventario', value: numMat, tone:''},
+      {label:'Materiales con stock bajo', value: stockBajo, tone: stockBajo>0?'danger':'success'}
+    ];
+    grid.innerHTML = cards.map(c => `
+      <div class="kpi-card ${c.tone?('tone-'+c.tone):''} ${c.big?'big':''}">
+        <div class="kpi-label">${c.label}</div>
+        <div class="kpi-value">${c.value}</div>
+      </div>
+    `).join('');
+  },
+  _renderRecovery(){
+    const pct = Calc.recuperacionPct();
+    const inv = Calc.inversionTotal();
+    const recuperado = Math.min(Calc.ventasTotales(), inv) || (inv<=0?0:0);
+    const el = document.getElementById('recoveryBlock');
+    if(pct >= 100 && inv > 0){
+      el.innerHTML = `
+        <div class="recovery-big">${Utils.pct(pct)}</div>
+        <div class="progress-track"><div class="progress-fill done" style="width:100%"></div></div>
+        <div class="recovery-done-banner">🟢 INVERSIÓN RECUPERADA — Ganancia real: ${Utils.money(Calc.utilidadNeta())}</div>
+      `;
+    } else {
+      const falta = Math.max(0, inv - Calc.ventasTotales());
+      el.innerHTML = `
+        <div class="recovery-big">${Utils.pct(pct)}</div>
+        <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
+        <div class="recovery-meta"><span>Recuperado: ${Utils.money(Math.min(Calc.ventasTotales(), inv))}</span><span>Faltan: ${Utils.money(falta)}</span></div>
+      `;
+    }
+  },
+  _renderEstado(){
+    const estado = Calc.estadoFinanciero();
+    const u = Calc.utilidadNeta();
+    const map = {
+      ganancias: {cls:'ok', tag:'🟢 GANANCIAS', text:`El negocio genera una utilidad neta positiva de ${Utils.money(u)}. Ingresos superan costos y gastos.`},
+      equilibrio: {cls:'mid', tag:'🟡 EQUILIBRIO', text:'Los ingresos igualan exactamente a los costos y gastos. Ni ganancia ni pérdida.'},
+      rojo: {cls:'bad', tag:'🔴 EN ROJO', text:`El negocio está en pérdida de ${Utils.money(Math.abs(u))}. Los costos y gastos superan los ingresos.`}
+    };
+    const info = map[estado];
+    document.getElementById('estadoFinancieroBody').innerHTML = `
+      <span class="estado-tag ${info.cls}">${info.tag}</span>
+      <p class="estado-explain">${info.text}</p>
+    `;
+    const pill = document.getElementById('sidebarStatusPill');
+    pill.className = 'status-pill ' + (estado==='ganancias'?'':(estado==='equilibrio'?'warn':'danger'));
+    document.getElementById('sidebarStatusText').textContent = info.tag.replace(/^\S+\s/,'');
+  }
+};
+
+/* ---------------------------------------------------------------------- */
+/* VIEWS — NUEVO TRABAJO                                                   */
+/* ---------------------------------------------------------------------- */
+const NuevoTrabajoView = {
+  rows: [],
+  init(){
+    document.getElementById('trabajoFecha').value = Utils.todayISO();
+    document.getElementById('btnAgregarMaterial').onclick = ()=> this.addRow();
+    document.getElementById('btnRegistrarVenta').onclick = ()=> this.registrar();
+    this.rows = [];
+    this.renderRows();
+  },
+  addRow(){
+    const inv = Store.getInventario();
+    if(inv.length === 0){ Toast.show('warning','Primero registra materiales en Inventario.'); return; }
+    this.rows.push({rowId: Utils.uid(), materialId:'', cantidad:0});
+    this.renderRows();
+  },
+  removeRow(rowId){
+    this.rows = this.rows.filter(r=>r.rowId!==rowId);
+    this.renderRows();
+  },
+  renderRows(){
+    const wrap = document.getElementById('materialRows');
+    const inv = Store.getInventario();
+    document.getElementById('materialRowsEmpty').style.display = this.rows.length? 'none':'block';
+    wrap.innerHTML = this.rows.map(r=>{
+      const mat = inv.find(m=>m.id===r.materialId);
+      const costoUnit = mat ? Number(mat.costoPromedio) : 0;
+      const costoTotal = costoUnit * Number(r.cantidad||0);
+      return `
+      <div class="material-row" data-row="${r.rowId}">
+        <div class="field">
+          <label>Material</label>
+          <select class="mr-material" data-row="${r.rowId}">
+            <option value="">Selecciona…</option>
+            ${inv.map(m=>`<option value="${m.id}" ${m.id===r.materialId?'selected':''}>${Utils.escapeHtml(m.nombre)} (${Utils.num(m.cantidad,1)} ${Utils.escapeHtml(m.unidad)} disp.)</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label>Cantidad usada</label>
+          <input type="number" step="0.01" min="0" class="mr-cantidad" data-row="${r.rowId}" value="${r.cantidad||''}">
+        </div>
+        <div class="field">
+          <label>Unidad</label>
+          <input type="text" value="${mat?Utils.escapeHtml(mat.unidad):'—'}" disabled>
+        </div>
+        <div class="field">
+          <label>Costo unitario</label>
+          <input type="text" value="${Utils.money(costoUnit)}" disabled>
+        </div>
+        <div class="field">
+          <label>Costo usado</label>
+          <input type="text" value="${Utils.money(costoTotal)}" disabled>
+        </div>
+        <button class="material-row-remove" data-row="${r.rowId}" title="Eliminar">✕</button>
+      </div>`;
+    }).join('');
+
+    wrap.querySelectorAll('.mr-material').forEach(sel=>{
+      sel.onchange = (e)=>{
+        const r = this.rows.find(x=>x.rowId===e.target.dataset.row);
+        r.materialId = e.target.value;
+        this.renderRows();
+        this.updateTotals();
+      };
+    });
+    wrap.querySelectorAll('.mr-cantidad').forEach(inp=>{
+      inp.oninput = (e)=>{
+        const r = this.rows.find(x=>x.rowId===e.target.dataset.row);
+        r.cantidad = Number(e.target.value)||0;
+        this.updateTotalsOnly();
+      };
+    });
+    wrap.querySelectorAll('.material-row-remove').forEach(btn=>{
+      btn.onclick = (e)=> this.removeRow(e.target.dataset.row);
+    });
+    this.updateTotals();
+  },
+  updateTotalsOnly(){
+    // update just the costo usado fields without re-render (keeps focus)
+    const inv = Store.getInventario();
+    document.querySelectorAll('#materialRows .material-row').forEach(rowEl=>{
+      const rowId = rowEl.dataset.row;
+      const r = this.rows.find(x=>x.rowId===rowId);
+      const mat = inv.find(m=>m.id===r.materialId);
+      const costoUnit = mat? Number(mat.costoPromedio):0;
+      const costoTotal = costoUnit * Number(r.cantidad||0);
+      const fields = rowEl.querySelectorAll('input[disabled]');
+      if(fields[1]) fields[1].value = Utils.money(costoTotal);
+    });
+    this.updateTotals();
+  },
+  updateTotals(){
+    const inv = Store.getInventario();
+    let costoTotal = 0;
+    this.rows.forEach(r=>{
+      const mat = inv.find(m=>m.id===r.materialId);
+      if(mat) costoTotal += Number(mat.costoPromedio) * Number(r.cantidad||0);
+    });
+    const precio = Number(document.getElementById('trabajoPrecio').value)||0;
+    const ganancia = precio - costoTotal;
+    const margen = Calc.margen(precio, costoTotal);
+    document.getElementById('totCostoMateriales').textContent = Utils.money(costoTotal);
+    document.getElementById('totPrecioCobrado').textContent = Utils.money(precio);
+    document.getElementById('totGanancia').textContent = Utils.money(ganancia);
+    document.getElementById('totMargen').textContent = Utils.pct(margen);
+  },
+  registrar(){
+    const nombre = document.getElementById('trabajoNombre').value.trim();
+    const cliente = document.getElementById('trabajoCliente').value.trim();
+    const fecha = document.getElementById('trabajoFecha').value || Utils.todayISO();
+    const precio = Number(document.getElementById('trabajoPrecio').value);
+    const obs = document.getElementById('trabajoObs').value.trim();
+
+    if(!nombre){ Toast.show('warning','Escribe el nombre del trabajo.'); return; }
+    if(!precio || precio<=0){ Toast.show('warning','Ingresa un precio cobrado válido.'); return; }
+    if(this.rows.some(r=>!r.materialId)){ Toast.show('warning','Selecciona un material en cada fila, o elimínala.'); return; }
+
+    const inv = Store.getInventario();
+    // validate stock
+    const usados = [];
+    for(const r of this.rows){
+      const mat = inv.find(m=>m.id===r.materialId);
+      const cant = Number(r.cantidad||0);
+      if(!mat || cant<=0){ Toast.show('warning','Revisa las cantidades de los materiales.'); return; }
+      if(cant > Number(mat.cantidad)){
+        Toast.show('error', `Stock insuficiente de "${mat.nombre}". Disponible: ${Utils.num(mat.cantidad,1)} ${mat.unidad}.`);
+        return;
+      }
+      usados.push({materialId:mat.id, nombre:mat.nombre, cantidad:cant, unidad:mat.unidad, costoUnitario:Number(mat.costoPromedio), costoTotal: Number(mat.costoPromedio)*cant});
+    }
+
+    const costoTotalMateriales = usados.reduce((s,u)=>s+u.costoTotal,0);
+    const ganancia = precio - costoTotalMateriales;
+    const margen = Calc.margen(precio, costoTotalMateriales);
+
+    // discount inventory
+    usados.forEach(u=>{
+      const mat = inv.find(m=>m.id===u.materialId);
+      mat.cantidad = Number(mat.cantidad) - u.cantidad;
+    });
+    Store.setInventario(inv);
+
+    const ventas = Store.getVentas();
+    ventas.push({
+      id: Utils.uid(), fecha, nombreTrabajo: nombre, cliente, precioCobrado: precio,
+      observaciones: obs, materiales: usados, costoTotalMateriales, ganancia, margen
+    });
+    Store.setVentas(ventas);
+
+    Toast.show('success', `Venta registrada. Ganancia: ${Utils.money(ganancia)}`);
+    // reset form
+    document.getElementById('formTrabajo').reset();
+    document.getElementById('trabajoFecha').value = Utils.todayISO();
+    this.rows = [];
+    this.renderRows();
+    App.refreshBadges();
+  }
+};
+
+/* ---------------------------------------------------------------------- */
+/* VIEWS — INVENTARIO                                                      */
+/* ---------------------------------------------------------------------- */
+const InventarioView = {
+  init(){
+    document.getElementById('btnNuevoMaterial').onclick = ()=> this.openForm();
+    document.getElementById('invSearch').oninput = Utils.debounce(()=> this.render(), 200);
+    document.getElementById('invFiltroCategoria').onchange = ()=> this.render();
+    document.getElementById('invOrden').onchange = ()=> this.render();
+    this.populateCategoriaFilter();
+    this.render();
+  },
+  populateCategoriaFilter(){
+    const cfg = Store.getConfig();
+    const sel = document.getElementById('invFiltroCategoria');
+    const current = sel.value;
+    sel.innerHTML = '<option value="">Todas las categorías</option>' + cfg.categorias.map(c=>`<option value="${Utils.escapeHtml(c)}">${Utils.escapeHtml(c)}</option>`).join('');
+    sel.value = current;
+  },
+  render(){
+    let inv = Store.getInventario();
+    const q = document.getElementById('invSearch').value.trim().toLowerCase();
+    const cat = document.getElementById('invFiltroCategoria').value;
+    const orden = document.getElementById('invOrden').value;
+
+    if(q) inv = inv.filter(m=>m.nombre.toLowerCase().includes(q));
+    if(cat) inv = inv.filter(m=>m.categoria===cat);
+
+    if(orden==='cantidad') inv.sort((a,b)=>b.cantidad-a.cantidad);
+    else if(orden==='valor') inv.sort((a,b)=>(b.cantidad*b.costoPromedio)-(a.cantidad*a.costoPromedio));
+    else if(orden==='stock') inv.sort((a,b)=>(a.cantidad-a.stockMinimo)-(b.cantidad-b.stockMinimo));
+    else inv.sort((a,b)=>a.nombre.localeCompare(b.nombre));
+
+    const tbody = document.getElementById('tbodyInventario');
+    document.getElementById('invEmptyState').style.display = inv.length? 'none':'block';
+    tbody.innerHTML = inv.map(m=>{
+      const bajo = Number(m.cantidad) <= Number(m.stockMinimo||0);
+      return `
+      <tr>
+        <td class="wrap">${Utils.escapeHtml(m.nombre)}</td>
+        <td><span class="tag">${Utils.escapeHtml(m.categoria||'—')}</span></td>
+        <td>${Utils.num(m.cantidad,1)} ${Utils.escapeHtml(m.unidad)}</td>
+        <td>${Utils.money(m.costoPromedio)}</td>
+        <td>${Utils.money(Number(m.cantidad)*Number(m.costoPromedio))}</td>
+        <td>${bajo?`<span class="tag low">⚠ ${Utils.num(m.stockMinimo,1)}</span>`:Utils.num(m.stockMinimo,1)}</td>
+        <td>${Utils.formatDate(m.ultimaCompra)}</td>
+        <td>
+          <button class="row-icon-btn" data-edit="${m.id}" title="Editar">✎</button>
+          <button class="row-icon-btn danger" data-del="${m.id}" title="Eliminar">🗑</button>
+        </td>
+      </tr>`;
+    }).join('');
+
+    tbody.querySelectorAll('[data-edit]').forEach(b=> b.onclick = ()=> this.openForm(b.dataset.edit));
+    tbody.querySelectorAll('[data-del]').forEach(b=> b.onclick = ()=> this.remove(b.dataset.del));
+  },
+  openForm(id){
+    const cfg = Store.getConfig();
+    const inv = Store.getInventario();
+    const mat = id ? inv.find(m=>m.id===id) : null;
+    const bodyHtml = `
+      <div class="field"><label>Nombre</label><input type="text" id="mNombre" value="${mat?Utils.escapeHtml(mat.nombre):''}"></div>
+      <div class="field"><label>Categoría</label>
+        <select id="mCategoria">${cfg.categorias.map(c=>`<option value="${Utils.escapeHtml(c)}" ${mat&&mat.categoria===c?'selected':''}>${Utils.escapeHtml(c)}</option>`).join('')}</select>
+      </div>
+      <div class="field"><label>Unidad</label>
+        <select id="mUnidad">${cfg.unidades.map(u=>`<option value="${Utils.escapeHtml(u)}" ${mat&&mat.unidad===u?'selected':''}>${Utils.escapeHtml(u)}</option>`).join('')}</select>
+      </div>
+      <div class="field"><label>Cantidad disponible</label><input type="number" step="0.01" id="mCantidad" value="${mat?mat.cantidad:0}"></div>
+      <div class="field"><label>Costo promedio</label><input type="number" step="0.01" id="mCosto" value="${mat?mat.costoPromedio:0}"></div>
+      <div class="field"><label>Stock mínimo</label><input type="number" step="0.01" id="mStockMin" value="${mat?mat.stockMinimo:cfg.stockMinimoDefault}"></div>
+    `;
+    Modal.open({
+      title: mat? 'Editar material' : 'Nuevo material',
+      bodyHtml,
+      footButtons: [
+        {label:'Cancelar', className:'btn-ghost', onClick: ()=>Modal.close()},
+        {label:'Guardar', className:'btn-primary', onClick: ()=>{
+          const nombre = document.getElementById('mNombre').value.trim();
+          if(!nombre){ Toast.show('warning','El nombre es obligatorio.'); return; }
+          const data = {
+            nombre,
+            categoria: document.getElementById('mCategoria').value,
+            unidad: document.getElementById('mUnidad').value,
+            cantidad: Number(document.getElementById('mCantidad').value)||0,
+            costoPromedio: Number(document.getElementById('mCosto').value)||0,
+            stockMinimo: Number(document.getElementById('mStockMin').value)||0
+          };
+          const list = Store.getInventario();
+          if(mat){
+            Object.assign(mat, data);
+            Store.setInventario(list);
+            Toast.show('success','Material actualizado.');
+          } else {
+            list.push({id: Utils.uid(), ultimaCompra:null, ...data});
+            Store.setInventario(list);
+            Toast.show('success','Material creado.');
+          }
+          Modal.close();
+          this.render();
+          App.refreshBadges();
+        }}
+      ]
+    });
+  },
+  remove(id){
+    Modal.confirm('¿Eliminar este material del inventario? Esta acción no se puede deshacer.', ()=>{
+      const list = Store.getInventario().filter(m=>m.id!==id);
+      Store.setInventario(list);
+      Toast.show('success','Material eliminado.');
+      this.render();
+      App.refreshBadges();
+    });
+  }
+};
+
+/* ---------------------------------------------------------------------- */
+/* VIEWS — COMPRAS                                                         */
+/* ---------------------------------------------------------------------- */
+const ComprasView = {
+  init(){
+    document.getElementById('compraFecha').value = Utils.todayISO();
+    document.getElementById('btnRegistrarCompra').onclick = ()=> this.registrar();
+    ['compraCantidad','compraPrecioTotal'].forEach(id=>{
+      document.getElementById(id).oninput = ()=> this.updatePreview();
+    });
+    this.populateDatalists();
+    this.render();
+  },
+  populateDatalists(){
+    const cfg = Store.getConfig();
+    document.getElementById('categoriasDatalist').innerHTML = cfg.categorias.map(c=>`<option value="${Utils.escapeHtml(c)}">`).join('');
+    document.getElementById('unidadesDatalist').innerHTML = cfg.unidades.map(u=>`<option value="${Utils.escapeHtml(u)}">`).join('');
+    document.getElementById('materialesDatalist').innerHTML = Store.getInventario().map(m=>`<option value="${Utils.escapeHtml(m.nombre)}">`).join('');
+  },
+  updatePreview(){
+    const cant = Number(document.getElementById('compraCantidad').value)||0;
+    const total = Number(document.getElementById('compraPrecioTotal').value)||0;
+    const box = document.getElementById('compraPreview');
+    if(cant>0 && total>0){
+      const unit = total/cant;
+      box.style.display='block';
+      box.textContent = `Precio unitario calculado: ${Utils.money(unit)}`;
+    } else box.style.display='none';
+  },
+  registrar(){
+    const fecha = document.getElementById('compraFecha').value || Utils.todayISO();
+    const proveedor = document.getElementById('compraProveedor').value.trim();
+    const nombreMat = document.getElementById('compraMaterial').value.trim();
+    const categoria = document.getElementById('compraCategoria').value.trim() || 'Otros';
+    const cantidad = Number(document.getElementById('compraCantidad').value);
+    const unidad = document.getElementById('compraUnidad').value.trim() || 'unid.';
+    const precioTotal = Number(document.getElementById('compraPrecioTotal').value);
+    const obs = document.getElementById('compraObs').value.trim();
+
+    if(!nombreMat){ Toast.show('warning','Escribe el nombre del material.'); return; }
+    if(!cantidad || cantidad<=0){ Toast.show('warning','Ingresa una cantidad válida.'); return; }
+    if(!precioTotal || precioTotal<=0){ Toast.show('warning','Ingresa el precio total pagado.'); return; }
+
+    const precioUnitario = precioTotal / cantidad;
+    const inv = Store.getInventario();
+    let mat = inv.find(m=>m.nombre.toLowerCase()===nombreMat.toLowerCase());
+
+    if(mat){
+      const cantidadAnterior = Number(mat.cantidad);
+      const costoAnterior = Number(mat.costoPromedio);
+      const nuevaCantidad = cantidadAnterior + cantidad;
+      const nuevoCostoPromedio = nuevaCantidad>0 ? ((cantidadAnterior*costoAnterior) + (cantidad*precioUnitario)) / nuevaCantidad : precioUnitario;
+      mat.cantidad = nuevaCantidad;
+      mat.costoPromedio = nuevoCostoPromedio;
+      mat.ultimaCompra = fecha;
+      if(categoria) mat.categoria = mat.categoria || categoria;
+    } else {
+      mat = {id: Utils.uid(), nombre: nombreMat, categoria, unidad, cantidad, costoPromedio: precioUnitario, stockMinimo: Store.getConfig().stockMinimoDefault||10, ultimaCompra: fecha};
+      inv.push(mat);
+    }
+    Store.setInventario(inv);
+
+    const compras = Store.getCompras();
+    compras.push({id: Utils.uid(), fecha, proveedor, materialId: mat.id, materialNombre: mat.nombre, categoria, cantidad, unidad, precioUnitario, precioTotal, observaciones: obs});
+    Store.setCompras(compras);
+
+    Toast.show('success', `Compra registrada. Costo unitario: ${Utils.money(precioUnitario)}`);
+    document.getElementById('formCompra').reset();
+    document.getElementById('compraFecha').value = Utils.todayISO();
+    document.getElementById('compraPreview').style.display='none';
+    this.populateDatalists();
+    this.render();
+    App.refreshBadges();
+  },
+  render(){
+    const compras = [...Store.getCompras()].sort((a,b)=> b.fecha.localeCompare(a.fecha)).slice(0,50);
+    const tbody = document.getElementById('tbodyCompras');
+    document.getElementById('comprasEmptyState').style.display = compras.length? 'none':'block';
+    tbody.innerHTML = compras.map(c=>`
+      <tr>
+        <td>${Utils.formatDate(c.fecha)}</td>
+        <td class="wrap">${Utils.escapeHtml(c.materialNombre)}</td>
+        <td>${Utils.num(c.cantidad,1)} ${Utils.escapeHtml(c.unidad)}</td>
+        <td>${Utils.money(c.precioUnitario)}</td>
+        <td>${Utils.money(c.precioTotal)}</td>
+        <td><button class="row-icon-btn danger" data-del="${c.id}" title="Eliminar">🗑</button></td>
+      </tr>`).join('');
+    tbody.querySelectorAll('[data-del]').forEach(b=> b.onclick = ()=> this.remove(b.dataset.del));
+  },
+  remove(id){
+    Modal.confirm('¿Eliminar este registro de compra? El inventario no se recalculará automáticamente.', ()=>{
+      Store.setCompras(Store.getCompras().filter(c=>c.id!==id));
+      Toast.show('success','Compra eliminada.');
+      this.render();
+      App.refreshBadges();
+    });
+  }
+};
+
+/* ---------------------------------------------------------------------- */
+/* VIEWS — HISTORIAL                                                       */
+/* ---------------------------------------------------------------------- */
+const HistorialView = {
+  init(){
+    document.getElementById('histSearch').oninput = Utils.debounce(()=>this.render(), 200);
+    document.getElementById('histMes').onchange = ()=> this.render();
+    document.getElementById('histClearFilters').onclick = ()=>{
+      document.getElementById('histSearch').value='';
+      document.getElementById('histMes').value='';
+      this.render();
+    };
+    this.render();
+  },
+  render(){
+    let ventas = [...Store.getVentas()].sort((a,b)=> b.fecha.localeCompare(a.fecha));
+    const q = document.getElementById('histSearch').value.trim().toLowerCase();
+    const mes = document.getElementById('histMes').value;
+    if(q) ventas = ventas.filter(v => (v.cliente||'').toLowerCase().includes(q) || (v.nombreTrabajo||'').toLowerCase().includes(q));
+    if(mes) ventas = ventas.filter(v => Utils.monthKey(v.fecha)===mes);
+
+    const tbody = document.getElementById('tbodyHistorial');
+    document.getElementById('histEmptyState').style.display = ventas.length? 'none':'block';
+    tbody.innerHTML = ventas.map(v=>`
+      <tr>
+        <td>${Utils.formatDate(v.fecha)}</td>
+        <td class="wrap">${Utils.escapeHtml(v.cliente||'—')}</td>
+        <td class="wrap">${Utils.escapeHtml(v.nombreTrabajo)}</td>
+        <td>${Utils.money(v.precioCobrado)}</td>
+        <td>${Utils.money(v.costoTotalMateriales)}</td>
+        <td class="${v.ganancia>=0?'':''}" style="color:${v.ganancia>=0?'var(--success)':'var(--danger)'}">${Utils.money(v.ganancia)}</td>
+        <td>${Utils.pct(v.margen)}</td>
+        <td><button class="row-icon-btn" data-detail="${v.id}">Ver</button></td>
+      </tr>`).join('');
+    tbody.querySelectorAll('[data-detail]').forEach(b=> b.onclick = ()=> this.showDetail(b.dataset.detail));
+  },
+  showDetail(id){
+    const v = Store.getVentas().find(x=>x.id===id);
+    if(!v) return;
+    const matHtml = (v.materiales||[]).map(m=>`
+      <div class="detail-mat-row"><span>${Utils.escapeHtml(m.nombre)} — ${Utils.num(m.cantidad,1)} ${Utils.escapeHtml(m.unidad)}</span><span>${Utils.money(m.costoTotal)}</span></div>
+    `).join('');
+    Modal.open({
+      title: v.nombreTrabajo,
+      bodyHtml: `
+        <p class="muted">Cliente: ${Utils.escapeHtml(v.cliente||'—')} · ${Utils.formatDate(v.fecha)}</p>
+        <div class="detail-mat-list">${matHtml || '<p class="muted">Sin materiales registrados.</p>'}</div>
+        <div class="totals-strip" style="margin-top:16px">
+          <div class="tot-item"><span class="tot-label">Costo materiales</span><span class="tot-value">${Utils.money(v.costoTotalMateriales)}</span></div>
+          <div class="tot-item"><span class="tot-label">Precio</span><span class="tot-value">${Utils.money(v.precioCobrado)}</span></div>
+          <div class="tot-item"><span class="tot-label">Ganancia</span><span class="tot-value accent-text">${Utils.money(v.ganancia)}</span></div>
+          <div class="tot-item"><span class="tot-label">Margen</span><span class="tot-value">${Utils.pct(v.margen)}</span></div>
+        </div>
+        ${v.observaciones? `<p class="muted" style="margin-top:12px">Notas: ${Utils.escapeHtml(v.observaciones)}</p>`:''}
+      `,
+      footButtons: [
+        {label:'Eliminar venta', className:'btn-danger', onClick: ()=>{
+          Modal.confirm('¿Eliminar esta venta del historial? (El inventario ya descontado no se restaurará automáticamente)', ()=>{
+            Store.setVentas(Store.getVentas().filter(x=>x.id!==id));
+            Toast.show('success','Venta eliminada.');
+            HistorialView.render();
+            App.refreshBadges();
+          });
+        }},
+        {label:'Cerrar', className:'btn-secondary', onClick: ()=>Modal.close()}
+      ]
+    });
+  }
+};
+
+/* ---------------------------------------------------------------------- */
+/* VIEWS — FINANZAS                                                        */
+/* ---------------------------------------------------------------------- */
+const FinanzasView = {
+  init(){
+    document.getElementById('btnGuardarCapital').onclick = ()=> this.saveCapital();
+    document.getElementById('btnNuevoGasto').onclick = ()=> this.openGastoForm();
+    document.getElementById('btnExportInventario').onclick = ()=> Exporter.inventario();
+    document.getElementById('btnExportVentas').onclick = ()=> Exporter.ventas();
+    document.getElementById('btnExportFinanzas').onclick = ()=> Exporter.finanzas();
+    document.getElementById('btnExportCompras').onclick = ()=> Exporter.compras();
+    document.getElementById('btnRespaldarJSON').onclick = ()=> Exporter.backupJSON();
+    document.getElementById('inputImportarJSON').onchange = (e)=> Exporter.importJSON(e);
+    document.getElementById('btnResetApp').onclick = ()=>{
+      Modal.confirm('Esto borrará TODOS los datos (inventario, compras, ventas, gastos y configuración). ¿Deseas continuar?', ()=>{
+        Store.resetAll();
+        Toast.show('success','Aplicación restablecida.');
+        App.renderCurrentView();
+      }, 'Restablecer aplicación');
+    };
+    this.render();
+  },
+  render(){
+    const cfg = Store.getConfig();
+    document.getElementById('capitalInicialInput').value = cfg.capitalInicial || 0;
+    this.renderKpis();
+    this.renderEstado();
+    this.renderGastos();
+    Charts.renderAll();
+  },
+  saveCapital(){
+    const cfg = Store.getConfig();
+    cfg.capitalInicial = Number(document.getElementById('capitalInicialInput').value)||0;
+    Store.setConfig(cfg);
+    Toast.show('success','Capital inicial actualizado.');
+    this.render();
+    App.refreshBadges();
+  },
+  renderKpis(){
+    const grid = document.getElementById('finanzasKpiGrid');
+    const cards = [
+      {label:'Total invertido', value: Utils.money(Calc.inversionTotal())},
+      {label:'Dinero recuperado', value: Utils.money(Calc.ventasTotales())},
+      {label:'Dinero aún invertido (inventario)', value: Utils.money(Calc.valorInventarioActual())},
+      {label:'Material consumido', value: Utils.money(Calc.materialConsumido())},
+      {label:'Gastos totales', value: Utils.money(Calc.gastosTotales())},
+      {label:'Utilidad neta', value: Utils.money(Calc.utilidadNeta()), tone: Calc.utilidadNeta()>=0?'success':'danger'},
+      {label:'Capital disponible para reinvertir', value: Utils.money(Calc.capitalDisponible()), tone:'accent', big:true}
+    ];
+    grid.innerHTML = cards.map(c=>`
+      <div class="kpi-card ${c.tone?('tone-'+c.tone):''} ${c.big?'wide big':''}">
+        <div class="kpi-label">${c.label}</div>
+        <div class="kpi-value">${c.value}</div>
+      </div>`).join('');
+  },
+  renderEstado(){
+    const inv = Calc.inversionTotal();
+    const recuperado = Calc.ventasTotales();
+    const body = document.getElementById('finanzasEstadoBody');
+    if(recuperado < inv){
+      body.innerHTML = `
+        <span class="estado-tag bad">🔴 EN ROJO</span>
+        <p class="estado-explain">Has recuperado ${Utils.money(recuperado)} de ${Utils.money(inv)}. Aún faltan recuperar ${Utils.money(inv-recuperado)}.</p>`;
+    } else {
+      body.innerHTML = `
+        <span class="estado-tag ok">🟢 INVERSIÓN RECUPERADA</span>
+        <p class="estado-explain">Ganancia real: ${Utils.money(Calc.utilidadNeta())}</p>`;
+    }
+  },
+  renderGastos(){
+    const gastos = [...Store.getGastos()].sort((a,b)=> b.fecha.localeCompare(a.fecha));
+    const tbody = document.getElementById('tbodyGastos');
+    document.getElementById('gastosEmptyState').style.display = gastos.length? 'none':'block';
+    tbody.innerHTML = gastos.map(g=>`
+      <tr>
+        <td>${Utils.formatDate(g.fecha)}</td>
+        <td class="wrap">${Utils.escapeHtml(g.descripcion)}</td>
+        <td><span class="tag">${Utils.escapeHtml(g.categoria)}</span></td>
+        <td>${Utils.money(g.monto)}</td>
+        <td><button class="row-icon-btn danger" data-del="${g.id}">🗑</button></td>
+      </tr>`).join('');
+    tbody.querySelectorAll('[data-del]').forEach(b=> b.onclick = ()=>{
+      Modal.confirm('¿Eliminar este gasto?', ()=>{
+        Store.setGastos(Store.getGastos().filter(g=>g.id!==b.dataset.del));
+        Toast.show('success','Gasto eliminado.');
+        this.render();
+        App.refreshBadges();
+      });
+    });
+  },
+  openGastoForm(){
+    const categoriasGasto = ['Publicidad','Gasolina','Delivery','Empaques','Luz','Internet','Herramientas','Mantenimiento','Otros'];
+    Modal.open({
+      title:'Nuevo gasto',
+      bodyHtml: `
+        <div class="field"><label>Fecha</label><input type="date" id="gFecha" value="${Utils.todayISO()}"></div>
+        <div class="field"><label>Descripción</label><input type="text" id="gDesc" placeholder="Ej. Publicidad en Instagram"></div>
+        <div class="field"><label>Categoría</label><select id="gCategoria">${categoriasGasto.map(c=>`<option>${c}</option>`).join('')}</select></div>
+        <div class="field"><label>Monto</label><input type="number" step="0.01" id="gMonto" placeholder="0.00"></div>
+        <div class="field"><label>Observaciones</label><input type="text" id="gObs" placeholder="Opcional"></div>
+      `,
+      footButtons: [
+        {label:'Cancelar', className:'btn-ghost', onClick: ()=>Modal.close()},
+        {label:'Guardar gasto', className:'btn-primary', onClick: ()=>{
+          const monto = Number(document.getElementById('gMonto').value);
+          const desc = document.getElementById('gDesc').value.trim();
+          if(!desc){ Toast.show('warning','Escribe una descripción.'); return; }
+          if(!monto || monto<=0){ Toast.show('warning','Ingresa un monto válido.'); return; }
+          const gastos = Store.getGastos();
+          gastos.push({id:Utils.uid(), fecha: document.getElementById('gFecha').value||Utils.todayISO(), descripcion: desc, categoria: document.getElementById('gCategoria').value, monto, observaciones: document.getElementById('gObs').value.trim()});
+          Store.setGastos(gastos);
+          Toast.show('success','Gasto registrado.');
+          Modal.close();
+          this.render();
+          App.refreshBadges();
+        }}
+      ]
+    });
+  }
+};
+
+/* ---------------------------------------------------------------------- */
+/* VIEWS — CONFIGURACIÓN                                                   */
+/* ---------------------------------------------------------------------- */
+const ConfigView = {
+  init(){
+    document.getElementById('btnGuardarConfig').onclick = ()=> this.save();
+    this.render();
+  },
+  render(){
+    const cfg = Store.getConfig();
+    document.getElementById('cfgNombre').value = cfg.nombreNegocio||'';
+    document.getElementById('cfgMoneda').value = cfg.moneda||'';
+    document.getElementById('cfgStockMin').value = cfg.stockMinimoDefault||0;
+    document.getElementById('cfgTema').value = cfg.tema||'dark';
+    document.getElementById('cfgCategorias').value = (cfg.categorias||[]).join(', ');
+    document.getElementById('cfgUnidades').value = (cfg.unidades||[]).join(', ');
+  },
+  save(){
+    const cfg = Store.getConfig();
+    cfg.nombreNegocio = document.getElementById('cfgNombre').value.trim() || 'KJ Concept';
+    cfg.moneda = document.getElementById('cfgMoneda').value.trim() || 'S/.';
+    cfg.stockMinimoDefault = Number(document.getElementById('cfgStockMin').value)||0;
+    cfg.tema = document.getElementById('cfgTema').value;
+    cfg.categorias = document.getElementById('cfgCategorias').value.split(',').map(s=>s.trim()).filter(Boolean);
+    cfg.unidades = document.getElementById('cfgUnidades').value.split(',').map(s=>s.trim()).filter(Boolean);
+    Store.setConfig(cfg);
+    App.applyTheme(cfg.tema);
+    App.applyBrand(cfg.nombreNegocio);
+    Toast.show('success','Configuración guardada.');
+  }
+};
+
+/* ---------------------------------------------------------------------- */
+/* EXPORT                                                                  */
+/* ---------------------------------------------------------------------- */
+const Exporter = {
+  _download(wb, filename){
+    XLSX.writeFile(wb, filename);
+    Toast.show('success', `Archivo "${filename}" descargado.`);
+  },
+  inventario(){
+    const data = Store.getInventario().map(m=>({
+      Material:m.nombre, Categoria:m.categoria, Unidad:m.unidad, Cantidad:m.cantidad,
+      'Costo Promedio':m.costoPromedio, 'Valor Total':Number(m.cantidad)*Number(m.costoPromedio),
+      'Stock Minimo':m.stockMinimo, 'Ultima Compra':m.ultimaCompra
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Inventario');
+    this._download(wb, 'KJConcept_Inventario.xlsx');
+  },
+  ventas(){
+    const data = Store.getVentas().map(v=>({
+      Fecha:v.fecha, Cliente:v.cliente, Trabajo:v.nombreTrabajo, 'Precio Cobrado':v.precioCobrado,
+      'Costo Materiales':v.costoTotalMateriales, Ganancia:v.ganancia, 'Margen %':v.margen
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Ventas');
+    this._download(wb, 'KJConcept_Ventas.xlsx');
+  },
+  compras(){
+    const data = Store.getCompras().map(c=>({
+      Fecha:c.fecha, Proveedor:c.proveedor, Material:c.materialNombre, Categoria:c.categoria,
+      Cantidad:c.cantidad, Unidad:c.unidad, 'Precio Unitario':c.precioUnitario, 'Precio Total':c.precioTotal
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Compras');
+    this._download(wb, 'KJConcept_Compras.xlsx');
+  },
+  finanzas(){
+    const data = [{
+      'Inversion Total': Calc.inversionTotal(),
+      'Valor Inventario Actual': Calc.valorInventarioActual(),
+      'Material Consumido': Calc.materialConsumido(),
+      'Ventas Totales': Calc.ventasTotales(),
+      'Ganancia Bruta': Calc.gananciaBruta(),
+      'Gastos Totales': Calc.gastosTotales(),
+      'Utilidad Neta': Calc.utilidadNeta(),
+      'Capital Disponible': Calc.capitalDisponible(),
+      'Recuperacion %': Calc.recuperacionPct().toFixed(1)
+    }];
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wsGastos = XLSX.utils.json_to_sheet(Store.getGastos().map(g=>({Fecha:g.fecha, Descripcion:g.descripcion, Categoria:g.categoria, Monto:g.monto})));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Resumen Finanzas');
+    XLSX.utils.book_append_sheet(wb, wsGastos, 'Gastos');
+    this._download(wb, 'KJConcept_Finanzas.xlsx');
+  },
+  backupJSON(){
+    const data = Store.backupJSON();
+    const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `KJConcept_Respaldo_${Utils.todayISO()}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    Toast.show('success','Respaldo JSON descargado.');
+  },
+  importJSON(e){
+    const file = e.target.files[0];
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev)=>{
+      try{
+        const data = JSON.parse(ev.target.result);
+        Modal.confirm('Esto reemplazará todos los datos actuales con los del archivo importado. ¿Continuar?', ()=>{
+          Store.restoreJSON(data);
+          Toast.show('success','Datos importados correctamente.');
+          App.renderCurrentView();
+        }, 'Importar respaldo');
+      }catch(err){
+        Toast.show('error','El archivo JSON no es válido.');
+      }
+      e.target.value = '';
+    };
+    reader.readAsText(file);
+  }
+};
+
+/* ---------------------------------------------------------------------- */
+/* APP — Navigation, theming, bootstrap                                    */
+/* ---------------------------------------------------------------------- */
+const App = {
+  currentTab: 'dashboard',
+  init(){
+    Store.ensureDefaults();
+    const cfg = Store.getConfig();
+    this.applyTheme(cfg.tema);
+    this.applyBrand(cfg.nombreNegocio);
+
+    this.bindNav();
+    this.bindThemeToggle();
+    this.bindMobileMenu();
+
+    NuevoTrabajoView.init();
+    InventarioView.init();
+    ComprasView.init();
+    HistorialView.init();
+    FinanzasView.init();
+    ConfigView.init();
+
+    this.goTo('dashboard');
+    this.refreshBadges();
+  },
+  bindNav(){
+    document.querySelectorAll('[data-tab]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const tab = btn.dataset.tab;
+        if(tab === 'mas'){
+          document.getElementById('moreSheet').classList.toggle('open');
+          return;
+        }
+        document.getElementById('moreSheet').classList.remove('open');
+        this.goTo(tab);
+      });
+    });
+  },
+  bindThemeToggle(){
+    document.getElementById('themeToggle').onclick = ()=>{
+      const cfg = Store.getConfig();
+      cfg.tema = cfg.tema === 'dark' ? 'light' : 'dark';
+      Store.setConfig(cfg);
+      this.applyTheme(cfg.tema);
+      ConfigView.render();
+      Charts.renderAll();
+    };
+  },
+  bindMobileMenu(){
+    document.getElementById('menuBtn').onclick = ()=>{
+      document.getElementById('moreSheet').classList.toggle('open');
+    };
+  },
+  applyTheme(theme){
+    document.documentElement.setAttribute('data-theme', theme==='light'?'light':'dark');
+    document.getElementById('themeToggle').textContent = theme==='light' ? '◑' : '◐';
+  },
+  applyBrand(name){
+    document.getElementById('brandName').textContent = name || 'KJ Concept';
+    document.title = `${name || 'KJ Concept'} — Panel de Control`;
+  },
+  goTo(tab){
+    this.currentTab = tab;
+    document.querySelectorAll('.nav-item').forEach(b=> b.classList.toggle('active', b.dataset.tab===tab));
+    document.querySelectorAll('.bn-item').forEach(b=> b.classList.toggle('active', b.dataset.tab===tab));
+    document.querySelectorAll('.view').forEach(v=> v.classList.remove('active'));
+    const view = document.getElementById('view-'+tab);
+    if(view) view.classList.add('active');
+
+    const titles = {dashboard:'Dashboard', nuevoTrabajo:'Nuevo Trabajo', inventario:'Inventario', compras:'Compras', historial:'Historial', finanzas:'Finanzas', configuracion:'Configuración'};
+    document.getElementById('topbarTitle').textContent = titles[tab] || 'Dashboard';
+
+    this.renderCurrentView();
+  },
+  renderCurrentView(){
+    switch(this.currentTab){
+      case 'dashboard': DashboardView.render(); break;
+      case 'inventario': InventarioView.populateCategoriaFilter(); InventarioView.render(); break;
+      case 'compras': ComprasView.populateDatalists(); ComprasView.render(); break;
+      case 'historial': HistorialView.render(); break;
+      case 'finanzas': FinanzasView.render(); break;
+      case 'configuracion': ConfigView.render(); break;
+      case 'nuevoTrabajo': NuevoTrabajoView.renderRows(); break;
+    }
+  },
+  refreshBadges(){
+    const estado = Calc.estadoFinanciero();
+    const pill = document.getElementById('sidebarStatusPill');
+    const map = {ganancias:{cls:'', text:'GANANCIAS'}, equilibrio:{cls:'warn', text:'EQUILIBRIO'}, rojo:{cls:'danger', text:'EN ROJO'}};
+    pill.className = 'status-pill ' + map[estado].cls;
+    document.getElementById('sidebarStatusText').textContent = map[estado].text;
+
+    if(this.currentTab === 'dashboard') DashboardView.render();
+    if(this.currentTab === 'finanzas') FinanzasView.render();
+    if(this.currentTab === 'inventario') InventarioView.render();
+    if(this.currentTab === 'compras') ComprasView.render();
+  }
+};
+
+document.addEventListener('DOMContentLoaded', ()=> App.init());

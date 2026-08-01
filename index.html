@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>KJ Concept — Panel de Control</title>
+<link rel="icon" href="assets/icons/favicon.png" type="image/png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ============ TOASTS ============ -->
+<div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+<!-- ============ MODAL ROOT ============ -->
+<div id="modalRoot" class="modal-root"></div>
+
+<!-- ============ APP SHELL ============ -->
+<div class="app-shell">
+
+  <!-- Sidebar / Mobile Nav -->
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="brand-mark">
+        <img src="assets/icons/logo.png" alt="Logo KJ Concept" width="44" height="44">
+      </div>
+      <div class="brand-text">
+        <span class="brand-name" id="brandName">KJ Concept</span>
+        <span class="brand-sub">Ideas en detalles inolvidables</span>
+      </div>
+    </div>
+
+    <nav class="nav" id="mainNav">
+      <button class="nav-item active" data-tab="dashboard">
+        <span class="nav-ico">⌂</span><span>Dashboard</span>
+      </button>
+      <button class="nav-item" data-tab="nuevoTrabajo">
+        <span class="nav-ico">✎</span><span>Nuevo Trabajo</span>
+      </button>
+      <button class="nav-item" data-tab="inventario">
+        <span class="nav-ico">▦</span><span>Inventario</span>
+      </button>
+      <button class="nav-item" data-tab="compras">
+        <span class="nav-ico">↧</span><span>Compras</span>
+      </button>
+      <button class="nav-item" data-tab="historial">
+        <span class="nav-ico">≡</span><span>Historial</span>
+      </button>
+      <button class="nav-item" data-tab="finanzas">
+        <span class="nav-ico">◈</span><span>Finanzas</span>
+      </button>
+      <button class="nav-item" data-tab="configuracion">
+        <span class="nav-ico">⚙</span><span>Configuración</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-foot">
+      <div class="status-pill" id="sidebarStatusPill">
+        <span class="dot"></span><span id="sidebarStatusText">Cargando…</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Mobile bottom bar -->
+  <nav class="bottom-nav" id="bottomNav">
+    <button class="bn-item active" data-tab="dashboard"><span>⌂</span>Inicio</button>
+    <button class="bn-item" data-tab="nuevoTrabajo"><span>✎</span>Trabajo</button>
+    <button class="bn-item" data-tab="inventario"><span>▦</span>Stock</button>
+    <button class="bn-item" data-tab="finanzas"><span>◈</span>Finanzas</button>
+    <button class="bn-item" data-tab="mas"><span>⋯</span>Más</button>
+  </nav>
+
+  <!-- Mobile "more" sheet -->
+  <div class="more-sheet" id="moreSheet">
+    <div class="more-sheet-inner">
+      <button class="nav-item" data-tab="compras"><span class="nav-ico">↧</span><span>Compras</span></button>
+      <button class="nav-item" data-tab="historial"><span class="nav-ico">≡</span><span>Historial</span></button>
+      <button class="nav-item" data-tab="configuracion"><span class="nav-ico">⚙</span><span>Configuración</span></button>
+    </div>
+  </div>
+
+  <!-- Main content -->
+  <main class="main" id="mainContent">
+
+    <header class="topbar">
+      <button class="icon-btn only-mobile" id="menuBtn" aria-label="Menú">☰</button>
+      <h1 class="topbar-title" id="topbarTitle">Dashboard</h1>
+      <div class="topbar-actions">
+        <button class="icon-btn" id="themeToggle" title="Cambiar tema">◐</button>
+      </div>
+    </header>
+
+    <div class="view-scroll">
+
+      <!-- ============ DASHBOARD ============ -->
+      <section class="view active" id="view-dashboard">
+        <div class="skeleton-wrap" id="dashboardSkeleton"></div>
+        <div id="dashboardContent" style="display:none">
+
+          <div class="kpi-grid" id="kpiGrid"></div>
+
+          <div class="panel-row">
+            <div class="card panel-card">
+              <div class="card-head">
+                <h3>Recuperación de inversión</h3>
+              </div>
+              <div class="recovery-block" id="recoveryBlock"></div>
+            </div>
+            <div class="card panel-card status-card" id="estadoFinancieroCard">
+              <div class="card-head"><h3>Estado financiero</h3></div>
+              <div class="estado-body" id="estadoFinancieroBody"></div>
+            </div>
+          </div>
+
+          <div class="charts-grid">
+            <div class="card chart-card">
+              <div class="card-head"><h3>Ventas por mes</h3></div>
+              <div class="chart-holder"><canvas id="chartVentasMes"></canvas></div>
+            </div>
+            <div class="card chart-card">
+              <div class="card-head"><h3>Ganancias por mes</h3></div>
+              <div class="chart-holder"><canvas id="chartGananciasMes"></canvas></div>
+            </div>
+            <div class="card chart-card">
+              <div class="card-head"><h3>Ingresos vs. Gastos</h3></div>
+              <div class="chart-holder"><canvas id="chartIngresosGastos"></canvas></div>
+            </div>
+            <div class="card chart-card">
+              <div class="card-head"><h3>Materiales más utilizados</h3></div>
+              <div class="chart-holder"><canvas id="chartMaterialesUsados"></canvas></div>
+            </div>
+            <div class="card chart-card">
+              <div class="card-head"><h3>Gastos por categoría</h3></div>
+              <div class="chart-holder"><canvas id="chartGastosCategoria"></canvas></div>
+            </div>
+            <div class="card chart-card">
+              <div class="card-head"><h3>Stock más bajo</h3></div>
+              <div class="chart-holder"><canvas id="chartStockBajo"></canvas></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ NUEVO TRABAJO ============ -->
+      <section class="view" id="view-nuevoTrabajo">
+        <div class="card form-card">
+          <div class="card-head"><h3>Registrar venta</h3><p class="muted">Completa los datos del trabajo y agrega los materiales usados.</p></div>
+          <form id="formTrabajo" class="form-grid">
+            <div class="field">
+              <label>Nombre del trabajo</label>
+              <input type="text" id="trabajoNombre" placeholder="Ej. Stickers troquelados x50" required>
+            </div>
+            <div class="field">
+              <label>Cliente</label>
+              <input type="text" id="trabajoCliente" placeholder="Nombre del cliente">
+            </div>
+            <div class="field">
+              <label>Fecha</label>
+              <input type="date" id="trabajoFecha" required>
+            </div>
+            <div class="field">
+              <label>Precio cobrado</label>
+              <input type="number" step="0.01" min="0" id="trabajoPrecio" placeholder="0.00" required>
+            </div>
+            <div class="field field-wide">
+              <label>Observaciones</label>
+              <textarea id="trabajoObs" rows="2" placeholder="Notas del trabajo (opcional)"></textarea>
+            </div>
+          </form>
+
+          <div class="materials-block">
+            <div class="materials-head">
+              <h4>Materiales utilizados</h4>
+              <button class="btn btn-secondary btn-sm" id="btnAgregarMaterial">+ Agregar material</button>
+            </div>
+            <div id="materialRows" class="material-rows"></div>
+            <div class="empty-hint" id="materialRowsEmpty">Aún no agregas materiales. Presiona “Agregar material”.</div>
+          </div>
+
+          <div class="totals-strip">
+            <div class="tot-item">
+              <span class="tot-label">Costo total materiales</span>
+              <span class="tot-value" id="totCostoMateriales">S/. 0.00</span>
+            </div>
+            <div class="tot-item">
+              <span class="tot-label">Precio cobrado</span>
+              <span class="tot-value" id="totPrecioCobrado">S/. 0.00</span>
+            </div>
+            <div class="tot-item">
+              <span class="tot-label">Ganancia</span>
+              <span class="tot-value accent-text" id="totGanancia">S/. 0.00</span>
+            </div>
+            <div class="tot-item">
+              <span class="tot-label">Margen</span>
+              <span class="tot-value" id="totMargen">0%</span>
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <button class="btn btn-primary btn-lg" id="btnRegistrarVenta">Registrar venta</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ INVENTARIO ============ -->
+      <section class="view" id="view-inventario">
+        <div class="toolbar">
+          <div class="search-box">
+            <span>🔍</span>
+            <input type="text" id="invSearch" placeholder="Buscar material…">
+          </div>
+          <select id="invFiltroCategoria" class="select-input">
+            <option value="">Todas las categorías</option>
+          </select>
+          <select id="invOrden" class="select-input">
+            <option value="nombre">Ordenar: Nombre</option>
+            <option value="cantidad">Ordenar: Cantidad</option>
+            <option value="valor">Ordenar: Valor total</option>
+            <option value="stock">Ordenar: Stock bajo primero</option>
+          </select>
+          <button class="btn btn-primary" id="btnNuevoMaterial">+ Nuevo material</button>
+        </div>
+        <div class="table-wrap card">
+          <table class="table" id="tablaInventario">
+            <thead>
+              <tr>
+                <th>Material</th><th>Categoría</th><th>Cantidad</th><th>Costo prom.</th>
+                <th>Valor total</th><th>Stock mín.</th><th>Última compra</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="tbodyInventario"></tbody>
+          </table>
+          <div class="empty-state" id="invEmptyState" style="display:none">
+            <p>No hay materiales registrados todavía.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ COMPRAS ============ -->
+      <section class="view" id="view-compras">
+        <div class="two-col">
+          <div class="card form-card">
+            <div class="card-head"><h3>Registrar compra</h3></div>
+            <form id="formCompra" class="form-grid">
+              <div class="field">
+                <label>Fecha</label>
+                <input type="date" id="compraFecha" required>
+              </div>
+              <div class="field">
+                <label>Proveedor (opcional)</label>
+                <input type="text" id="compraProveedor" placeholder="Nombre del proveedor">
+              </div>
+              <div class="field">
+                <label>Material</label>
+                <input type="text" id="compraMaterial" list="materialesDatalist" placeholder="Nombre del material" required>
+                <datalist id="materialesDatalist"></datalist>
+              </div>
+              <div class="field">
+                <label>Categoría</label>
+                <input type="text" id="compraCategoria" list="categoriasDatalist" placeholder="Ej. Vinil, Papel">
+                <datalist id="categoriasDatalist"></datalist>
+              </div>
+              <div class="field">
+                <label>Cantidad</label>
+                <input type="number" step="0.01" min="0" id="compraCantidad" required>
+              </div>
+              <div class="field">
+                <label>Unidad</label>
+                <input type="text" id="compraUnidad" list="unidadesDatalist" placeholder="hojas, m, unid.">
+                <datalist id="unidadesDatalist"></datalist>
+              </div>
+              <div class="field">
+                <label>Precio total pagado</label>
+                <input type="number" step="0.01" min="0" id="compraPrecioTotal" required>
+              </div>
+              <div class="field field-wide">
+                <label>Observaciones</label>
+                <input type="text" id="compraObs" placeholder="Opcional">
+              </div>
+              <div class="field field-wide preview-box" id="compraPreview" style="display:none"></div>
+            </form>
+            <div class="form-actions">
+              <button class="btn btn-primary btn-lg" id="btnRegistrarCompra">Registrar compra</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h3>Compras recientes</h3></div>
+            <div class="table-wrap">
+              <table class="table" id="tablaCompras">
+                <thead><tr><th>Fecha</th><th>Material</th><th>Cant.</th><th>P. unit.</th><th>Total</th><th></th></tr></thead>
+                <tbody id="tbodyCompras"></tbody>
+              </table>
+              <div class="empty-state" id="comprasEmptyState" style="display:none">
+                <p>Aún no registras compras.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ HISTORIAL ============ -->
+      <section class="view" id="view-historial">
+        <div class="toolbar">
+          <div class="search-box"><span>🔍</span><input type="text" id="histSearch" placeholder="Buscar cliente o trabajo…"></div>
+          <input type="month" id="histMes" class="select-input">
+          <button class="btn btn-secondary" id="histClearFilters">Limpiar filtros</button>
+        </div>
+        <div class="table-wrap card">
+          <table class="table" id="tablaHistorial">
+            <thead>
+              <tr><th>Fecha</th><th>Cliente</th><th>Trabajo</th><th>Precio</th><th>Costo mat.</th><th>Ganancia</th><th>Margen</th><th></th></tr>
+            </thead>
+            <tbody id="tbodyHistorial"></tbody>
+          </table>
+          <div class="empty-state" id="histEmptyState" style="display:none">
+            <p>No hay ventas registradas todavía.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ FINANZAS ============ -->
+      <section class="view" id="view-finanzas">
+        <div class="card panel-card">
+          <div class="card-head"><h3>Capital inicial</h3></div>
+          <div class="capital-row">
+            <input type="number" step="0.01" id="capitalInicialInput" class="capital-input">
+            <button class="btn btn-primary" id="btnGuardarCapital">Guardar</button>
+          </div>
+        </div>
+
+        <div class="kpi-grid" id="finanzasKpiGrid"></div>
+
+        <div class="card panel-card status-card" id="finanzasEstadoCard">
+          <div class="card-head"><h3>¿Estamos en rojo?</h3></div>
+          <div id="finanzasEstadoBody"></div>
+        </div>
+
+        <div class="card panel-card">
+          <div class="card-head">
+            <h3>Gastos</h3>
+            <button class="btn btn-secondary btn-sm" id="btnNuevoGasto">+ Nuevo gasto</button>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="tablaGastos">
+              <thead><tr><th>Fecha</th><th>Descripción</th><th>Categoría</th><th>Monto</th><th></th></tr></thead>
+              <tbody id="tbodyGastos"></tbody>
+            </table>
+            <div class="empty-state" id="gastosEmptyState" style="display:none"><p>No hay gastos registrados.</p></div>
+          </div>
+        </div>
+
+        <div class="charts-grid">
+          <div class="card chart-card">
+            <div class="card-head"><h3>Flujo de caja mensual</h3></div>
+            <div class="chart-holder"><canvas id="chartFlujoCaja"></canvas></div>
+          </div>
+          <div class="card chart-card">
+            <div class="card-head"><h3>Evolución del inventario</h3></div>
+            <div class="chart-holder"><canvas id="chartEvolInventario"></canvas></div>
+          </div>
+          <div class="card chart-card">
+            <div class="card-head"><h3>Recuperación de la inversión</h3></div>
+            <div class="chart-holder"><canvas id="chartRecuperacion"></canvas></div>
+          </div>
+          <div class="card chart-card">
+            <div class="card-head"><h3>Compras por mes</h3></div>
+            <div class="chart-holder"><canvas id="chartComprasMes"></canvas></div>
+          </div>
+        </div>
+
+        <div class="card panel-card">
+          <div class="card-head"><h3>Exportar &amp; respaldo</h3></div>
+          <div class="export-grid">
+            <button class="btn btn-secondary" id="btnExportInventario">Exportar Inventario (Excel)</button>
+            <button class="btn btn-secondary" id="btnExportVentas">Exportar Ventas (Excel)</button>
+            <button class="btn btn-secondary" id="btnExportFinanzas">Exportar Finanzas (Excel)</button>
+            <button class="btn btn-secondary" id="btnExportCompras">Exportar Compras (Excel)</button>
+            <button class="btn btn-secondary" id="btnRespaldarJSON">Respaldar todo (JSON)</button>
+            <label class="btn btn-secondary file-btn">Importar JSON
+              <input type="file" id="inputImportarJSON" accept="application/json" hidden>
+            </label>
+            <button class="btn btn-danger" id="btnResetApp">Restablecer aplicación</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ CONFIGURACIÓN ============ -->
+      <section class="view" id="view-configuracion">
+        <div class="card form-card">
+          <div class="card-head"><h3>Negocio</h3></div>
+          <form class="form-grid" id="formConfig">
+            <div class="field">
+              <label>Nombre del negocio</label>
+              <input type="text" id="cfgNombre">
+            </div>
+            <div class="field">
+              <label>Moneda</label>
+              <input type="text" id="cfgMoneda" placeholder="S/.">
+            </div>
+            <div class="field">
+              <label>Stock mínimo por defecto</label>
+              <input type="number" step="0.01" id="cfgStockMin">
+            </div>
+            <div class="field">
+              <label>Tema</label>
+              <select id="cfgTema" class="select-input">
+                <option value="dark">Oscuro</option>
+                <option value="light">Claro</option>
+              </select>
+            </div>
+            <div class="field field-wide">
+              <label>Categorías (separadas por coma)</label>
+              <input type="text" id="cfgCategorias" placeholder="Vinil, Papel, Imantado…">
+            </div>
+            <div class="field field-wide">
+              <label>Unidades (separadas por coma)</label>
+              <input type="text" id="cfgUnidades" placeholder="hojas, m, unid., kg…">
+            </div>
+          </form>
+          <div class="form-actions">
+            <button class="btn btn-primary btn-lg" id="btnGuardarConfig">Guardar configuración</button>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
