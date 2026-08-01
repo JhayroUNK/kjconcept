@@ -190,7 +190,10 @@ const Store = {
         capitalInicial: 0,
         precioHoraHombre: 8,
         precioImpresionHoja: 0.5,
-        precioCorte: 0.3
+        precioCorte: 0.3,
+        comisionVendedoraPct: 10,
+        precioEmpaqueBolsa: 0.5,
+        precioEmpaqueCaja: 1
       });
     }
     if(this._cache[KEYS.inventario] === undefined) this._write(KEYS.inventario, []);
@@ -206,7 +209,7 @@ const Store = {
   // estándar sin tocar el resto de lo que el usuario ya configuró.
   migrateConfig(){
     const cfg = this.getConfig();
-    const defaults = { precioHoraHombre: 8, precioImpresionHoja: 0.5, precioCorte: 0.3 };
+    const defaults = { precioHoraHombre: 8, precioImpresionHoja: 0.5, precioCorte: 0.3, comisionVendedoraPct: 10, precioEmpaqueBolsa: 0.5, precioEmpaqueCaja: 1 };
     let changed = false;
     Object.keys(defaults).forEach(key=>{
       if(cfg[key] === undefined || cfg[key] === null){ cfg[key] = defaults[key]; changed = true; }
@@ -669,9 +672,13 @@ const NuevoTrabajoView = {
     document.getElementById('btnAgregarMaterial').onclick = ()=> this.addRow();
     document.getElementById('btnRegistrarVenta').onclick = ()=> this.registrar();
     document.getElementById('trabajoPrecioHora').value = Store.getConfig().precioHoraHombre ?? 8;
+    document.getElementById('trabajoEmpaque').value = 'ninguno';
+    document.getElementById('trabajoComision').checked = false;
     ['trabajoPrecio','trabajoHoras','trabajoPrecioHora'].forEach(id=>{
       document.getElementById(id).oninput = ()=> this.updateTotals();
     });
+    document.getElementById('trabajoEmpaque').onchange = ()=> this.updateTotals();
+    document.getElementById('trabajoComision').onchange = ()=> this.updateTotals();
     this.rows = [];
     this.renderRows();
   },
@@ -807,6 +814,23 @@ const NuevoTrabajoView = {
     });
     return total;
   },
+  // Costo de empaque según lo elegido: bolsa o caja (tarifa fija, configurable)
+  _costoEmpaque(){
+    const cfg = Store.getConfig();
+    const tipo = document.getElementById('trabajoEmpaque').value;
+    if(tipo === 'bolsa') return Number(cfg.precioEmpaqueBolsa||0);
+    if(tipo === 'caja') return Number(cfg.precioEmpaqueCaja||0);
+    return 0;
+  },
+  // Comisión de la vendedora: % configurado, calculado SOBRE LA UTILIDAD del
+  // trabajo (no sobre el precio cobrado), y solo si el trabajo lo requiere.
+  _comision(gananciaAntesComision){
+    const cfg = Store.getConfig();
+    const requiere = document.getElementById('trabajoComision').checked;
+    if(!requiere) return 0;
+    const pct = Number(cfg.comisionVendedoraPct||0)/100;
+    return Math.max(0, gananciaAntesComision) * pct;
+  },
   updateTotals(){
     const inv = Store.getInventario();
     let costoMateriales = 0;
@@ -816,14 +840,19 @@ const NuevoTrabajoView = {
     });
     const costoImpresionCorte = this._costoImpresionCorte();
     const costoManoObra = this._costoManoObra();
-    const costoProduccion = costoMateriales + costoImpresionCorte + costoManoObra;
+    const costoEmpaque = this._costoEmpaque();
+    const costoProduccion = costoMateriales + costoImpresionCorte + costoManoObra + costoEmpaque;
     const precio = Number(document.getElementById('trabajoPrecio').value)||0;
-    const ganancia = precio - costoProduccion;
-    const margen = Calc.margen(precio, costoProduccion);
+    const gananciaAntesComision = precio - costoProduccion;
+    const comision = this._comision(gananciaAntesComision);
+    const ganancia = gananciaAntesComision - comision;
+    const margen = Calc.margen(precio, costoProduccion + comision);
     document.getElementById('totCostoMateriales').textContent = Utils.money(costoMateriales);
     document.getElementById('totCostoImpresionCorte').textContent = Utils.money(costoImpresionCorte);
     document.getElementById('totCostoManoObra').textContent = Utils.money(costoManoObra);
+    document.getElementById('totCostoEmpaque').textContent = Utils.money(costoEmpaque);
     document.getElementById('totPrecioCobrado').textContent = Utils.money(precio);
+    document.getElementById('totComision').textContent = Utils.money(comision);
     document.getElementById('totGanancia').textContent = Utils.money(ganancia);
     document.getElementById('totMargen').textContent = Utils.pct(margen);
   },
@@ -861,13 +890,20 @@ const NuevoTrabajoView = {
       });
     }
 
+    const empaqueTipo = document.getElementById('trabajoEmpaque').value;
+    const requiereVendedora = document.getElementById('trabajoComision').checked;
+
     const costoTotalMateriales = usados.reduce((s,u)=>s+u.costoTotal,0);
     const costoImpresion = usados.reduce((s,u)=>s+u.costoImpresion,0);
     const costoCorte = usados.reduce((s,u)=>s+u.costoCorte,0);
     const costoManoObra = horasHombre * precioHoraHombre;
-    const costoProduccionTotal = costoTotalMateriales + costoImpresion + costoCorte + costoManoObra;
-    const ganancia = precio - costoProduccionTotal;
-    const margen = Calc.margen(precio, costoProduccionTotal);
+    const costoEmpaque = this._costoEmpaque();
+    const costoProduccionTotal = costoTotalMateriales + costoImpresion + costoCorte + costoManoObra + costoEmpaque;
+    const gananciaAntesComision = precio - costoProduccionTotal;
+    const comisionPct = Number(cfg.comisionVendedoraPct||0);
+    const comision = requiereVendedora ? Math.max(0, gananciaAntesComision) * (comisionPct/100) : 0;
+    const ganancia = gananciaAntesComision - comision;
+    const margen = Calc.margen(precio, costoProduccionTotal + comision);
 
     // discount inventory
     usados.forEach(u=>{
@@ -882,6 +918,8 @@ const NuevoTrabajoView = {
       observaciones: obs, materiales: usados,
       costoTotalMateriales, costoImpresion, costoCorte,
       horasHombre, precioHoraHombre, costoManoObra,
+      empaqueTipo, costoEmpaque,
+      requiereVendedora, comisionPct, comision, gananciaAntesComision,
       costoProduccionTotal, ganancia, margen
     });
     Store.setVentas(ventas);
@@ -891,6 +929,8 @@ const NuevoTrabajoView = {
     document.getElementById('formTrabajo').reset();
     document.getElementById('trabajoFecha').value = Utils.todayISO();
     document.getElementById('trabajoPrecioHora').value = cfg.precioHoraHombre ?? 8;
+    document.getElementById('trabajoEmpaque').value = 'ninguno';
+    document.getElementById('trabajoComision').checked = false;
     this.rows = [];
     this.renderRows();
     App.refreshBadges();
@@ -1298,16 +1338,22 @@ const HistorialView = {
     const manoObraHtml = Number(v.horasHombre)>0 ? `
       <div class="detail-mat-row"><span>Mano de obra — ${Utils.num(v.horasHombre,2)} h × ${Utils.money(v.precioHoraHombre)}</span><span>${Utils.money(v.costoManoObra)}</span></div>
     ` : '';
+    const empaqueLabelMap = {bolsa:'Bolsa', caja:'Caja'};
+    const empaqueHtml = (v.empaqueTipo && v.empaqueTipo!=='ninguno') ? `
+      <div class="detail-mat-row"><span>Empaque — ${empaqueLabelMap[v.empaqueTipo]||v.empaqueTipo}</span><span>${Utils.money(v.costoEmpaque||0)}</span></div>
+    ` : '';
     Modal.open({
       title: v.nombreTrabajo,
       bodyHtml: `
         <p class="muted">Cliente: ${Utils.escapeHtml(v.cliente||'—')} · ${Utils.formatDate(v.fecha)}</p>
-        <div class="detail-mat-list">${matHtml || '<p class="muted">Sin materiales registrados.</p>'}${manoObraHtml}</div>
+        <div class="detail-mat-list">${matHtml || '<p class="muted">Sin materiales registrados.</p>'}${manoObraHtml}${empaqueHtml}</div>
         <div class="totals-strip" style="margin-top:16px">
           <div class="tot-item"><span class="tot-label">Costo materiales</span><span class="tot-value">${Utils.money(v.costoTotalMateriales)}</span></div>
           <div class="tot-item"><span class="tot-label">Impresión + corte</span><span class="tot-value">${Utils.money((v.costoImpresion||0)+(v.costoCorte||0))}</span></div>
           <div class="tot-item"><span class="tot-label">Mano de obra</span><span class="tot-value">${Utils.money(v.costoManoObra||0)}</span></div>
+          <div class="tot-item"><span class="tot-label">Empaque</span><span class="tot-value">${Utils.money(v.costoEmpaque||0)}</span></div>
           <div class="tot-item"><span class="tot-label">Precio</span><span class="tot-value">${Utils.money(v.precioCobrado)}</span></div>
+          ${v.requiereVendedora ? `<div class="tot-item"><span class="tot-label">Comisión vendedora (${Utils.pct(v.comisionPct||0)})</span><span class="tot-value">${Utils.money(v.comision||0)}</span></div>` : ''}
           <div class="tot-item"><span class="tot-label">Ganancia</span><span class="tot-value accent-text">${Utils.money(v.ganancia)}</span></div>
           <div class="tot-item"><span class="tot-label">Margen</span><span class="tot-value">${Utils.pct(v.margen)}</span></div>
         </div>
@@ -1346,6 +1392,20 @@ const HistorialView = {
         <div class="field"><label>Precio cobrado</label><input type="number" step="0.01" min="0" id="editPrecio" value="${venta.precioCobrado||0}"></div>
         <div class="field"><label>Horas hombre trabajadas</label><input type="number" step="0.25" min="0" id="editHoras" value="${venta.horasHombre||0}"></div>
         <div class="field"><label>Precio por hora (S/.)</label><input type="number" step="0.01" min="0" id="editPrecioHora" value="${venta.precioHoraHombre ?? cfg.precioHoraHombre ?? 8}"></div>
+        <div class="field">
+          <label>Empaque</label>
+          <select id="editEmpaque" class="select-input">
+            <option value="ninguno" ${(!venta.empaqueTipo||venta.empaqueTipo==='ninguno')?'selected':''}>Sin empaque</option>
+            <option value="bolsa" ${venta.empaqueTipo==='bolsa'?'selected':''}>Bolsa (+${Utils.money(cfg.precioEmpaqueBolsa||0)})</option>
+            <option value="caja" ${venta.empaqueTipo==='caja'?'selected':''}>Caja (+${Utils.money(cfg.precioEmpaqueCaja||0)})</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Vendedora</label>
+          <label class="chk-label" style="margin-top:10px">
+            <input type="checkbox" id="editComision" ${venta.requiereVendedora?'checked':''}> Requiere vendedora (${Utils.pct(cfg.comisionVendedoraPct||0)} comisión sobre la utilidad)
+          </label>
+        </div>
         <div class="field field-wide"><label>Observaciones</label><textarea id="editObs" rows="2">${Utils.escapeHtml(venta.observaciones||'')}</textarea></div>
       </div>
       <div class="materials-block">
@@ -1360,7 +1420,9 @@ const HistorialView = {
         <div class="tot-item"><span class="tot-label">Costo materiales</span><span class="tot-value" id="editTotCostoMateriales">S/. 0.00</span></div>
         <div class="tot-item"><span class="tot-label">Impresión + corte</span><span class="tot-value" id="editTotCostoImpresionCorte">S/. 0.00</span></div>
         <div class="tot-item"><span class="tot-label">Mano de obra</span><span class="tot-value" id="editTotCostoManoObra">S/. 0.00</span></div>
+        <div class="tot-item"><span class="tot-label">Empaque</span><span class="tot-value" id="editTotCostoEmpaque">S/. 0.00</span></div>
         <div class="tot-item"><span class="tot-label">Precio cobrado</span><span class="tot-value" id="editTotPrecioCobrado">S/. 0.00</span></div>
+        <div class="tot-item"><span class="tot-label">Comisión vendedora</span><span class="tot-value" id="editTotComision">S/. 0.00</span></div>
         <div class="tot-item"><span class="tot-label">Ganancia</span><span class="tot-value accent-text" id="editTotGanancia">S/. 0.00</span></div>
         <div class="tot-item"><span class="tot-label">Margen</span><span class="tot-value" id="editTotMargen">0%</span></div>
       </div>
@@ -1373,6 +1435,8 @@ const HistorialView = {
         ['editPrecio','editHoras','editPrecioHora'].forEach(fid=>{
           overlay.querySelector('#'+fid).oninput = ()=> this._editUpdateTotals(overlay);
         });
+        overlay.querySelector('#editEmpaque').onchange = ()=> this._editUpdateTotals(overlay);
+        overlay.querySelector('#editComision').onchange = ()=> this._editUpdateTotals(overlay);
         this._editRenderRows(overlay);
       },
       footButtons: [
@@ -1488,14 +1552,21 @@ const HistorialView = {
     const horas = Number(overlay.querySelector('#editHoras').value)||0;
     const precioHora = Number(overlay.querySelector('#editPrecioHora').value)||0;
     const costoManoObra = horas * precioHora;
-    const costoProduccion = costoMateriales + costoImpresionCorte + costoManoObra;
+    const empaqueTipo = overlay.querySelector('#editEmpaque').value;
+    const costoEmpaque = empaqueTipo==='bolsa' ? Number(cfg.precioEmpaqueBolsa||0) : empaqueTipo==='caja' ? Number(cfg.precioEmpaqueCaja||0) : 0;
+    const costoProduccion = costoMateriales + costoImpresionCorte + costoManoObra + costoEmpaque;
     const precio = Number(overlay.querySelector('#editPrecio').value)||0;
-    const ganancia = precio - costoProduccion;
-    const margen = Calc.margen(precio, costoProduccion);
+    const gananciaAntesComision = precio - costoProduccion;
+    const requiereVendedora = overlay.querySelector('#editComision').checked;
+    const comision = requiereVendedora ? Math.max(0, gananciaAntesComision) * (Number(cfg.comisionVendedoraPct||0)/100) : 0;
+    const ganancia = gananciaAntesComision - comision;
+    const margen = Calc.margen(precio, costoProduccion + comision);
     overlay.querySelector('#editTotCostoMateriales').textContent = Utils.money(costoMateriales);
     overlay.querySelector('#editTotCostoImpresionCorte').textContent = Utils.money(costoImpresionCorte);
     overlay.querySelector('#editTotCostoManoObra').textContent = Utils.money(costoManoObra);
+    overlay.querySelector('#editTotCostoEmpaque').textContent = Utils.money(costoEmpaque);
     overlay.querySelector('#editTotPrecioCobrado').textContent = Utils.money(precio);
+    overlay.querySelector('#editTotComision').textContent = Utils.money(comision);
     overlay.querySelector('#editTotGanancia').textContent = Utils.money(ganancia);
     overlay.querySelector('#editTotMargen').textContent = Utils.pct(margen);
   },
@@ -1548,9 +1619,15 @@ const HistorialView = {
     const horasHombre = Number(document.getElementById('editHoras').value)||0;
     const precioHoraHombre = Number(document.getElementById('editPrecioHora').value)||0;
     const costoManoObra = horasHombre * precioHoraHombre;
-    const costoProduccionTotal = costoTotalMateriales + costoImpresion + costoCorte + costoManoObra;
-    const ganancia = precio - costoProduccionTotal;
-    const margen = Calc.margen(precio, costoProduccionTotal);
+    const empaqueTipo = document.getElementById('editEmpaque').value;
+    const costoEmpaque = empaqueTipo==='bolsa' ? Number(cfg.precioEmpaqueBolsa||0) : empaqueTipo==='caja' ? Number(cfg.precioEmpaqueCaja||0) : 0;
+    const costoProduccionTotal = costoTotalMateriales + costoImpresion + costoCorte + costoManoObra + costoEmpaque;
+    const gananciaAntesComision = precio - costoProduccionTotal;
+    const requiereVendedora = document.getElementById('editComision').checked;
+    const comisionPct = Number(cfg.comisionVendedoraPct||0);
+    const comision = requiereVendedora ? Math.max(0, gananciaAntesComision) * (comisionPct/100) : 0;
+    const ganancia = gananciaAntesComision - comision;
+    const margen = Calc.margen(precio, costoProduccionTotal + comision);
 
     Object.assign(venta, {
       nombreTrabajo: nombre,
@@ -1561,6 +1638,8 @@ const HistorialView = {
       materiales: usados,
       costoTotalMateriales, costoImpresion, costoCorte,
       horasHombre, precioHoraHombre, costoManoObra,
+      empaqueTipo, costoEmpaque,
+      requiereVendedora, comisionPct, comision, gananciaAntesComision,
       costoProduccionTotal, ganancia, margen
     });
     Store.setVentas(Store.getVentas().map(v=> v.id===id ? venta : v));
@@ -1749,6 +1828,9 @@ const ConfigView = {
     document.getElementById('cfgPrecioHora').value = cfg.precioHoraHombre ?? 8;
     document.getElementById('cfgPrecioImpresion').value = cfg.precioImpresionHoja ?? 0.5;
     document.getElementById('cfgPrecioCorte').value = cfg.precioCorte ?? 0.3;
+    document.getElementById('cfgComisionPct').value = cfg.comisionVendedoraPct ?? 10;
+    document.getElementById('cfgPrecioBolsa').value = cfg.precioEmpaqueBolsa ?? 0.5;
+    document.getElementById('cfgPrecioCaja').value = cfg.precioEmpaqueCaja ?? 1;
   },
   save(){
     const cfg = Store.getConfig();
@@ -1761,6 +1843,9 @@ const ConfigView = {
     cfg.precioHoraHombre = Number(document.getElementById('cfgPrecioHora').value)||0;
     cfg.precioImpresionHoja = Number(document.getElementById('cfgPrecioImpresion').value)||0;
     cfg.precioCorte = Number(document.getElementById('cfgPrecioCorte').value)||0;
+    cfg.comisionVendedoraPct = Number(document.getElementById('cfgComisionPct').value)||0;
+    cfg.precioEmpaqueBolsa = Number(document.getElementById('cfgPrecioBolsa').value)||0;
+    cfg.precioEmpaqueCaja = Number(document.getElementById('cfgPrecioCaja').value)||0;
     Store.setConfig(cfg);
     App.applyTheme(cfg.tema);
     App.applyBrand(cfg.nombreNegocio);
@@ -1792,6 +1877,10 @@ const Exporter = {
       Fecha:v.fecha, Cliente:v.cliente, Trabajo:v.nombreTrabajo, 'Precio Cobrado':v.precioCobrado,
       'Costo Materiales':v.costoTotalMateriales, 'Impresión':v.costoImpresion||0, 'Corte':v.costoCorte||0,
       'Horas Hombre':v.horasHombre||0, 'Precio Hora':v.precioHoraHombre||0, 'Mano de Obra':v.costoManoObra||0,
+      Empaque: v.empaqueTipo && v.empaqueTipo!=='ninguno' ? (v.empaqueTipo==='bolsa'?'Bolsa':'Caja') : '—',
+      'Costo Empaque':v.costoEmpaque||0,
+      'Requiere Vendedora': v.requiereVendedora ? 'Sí' : 'No',
+      'Comisión Vendedora': v.comision||0,
       Ganancia:v.ganancia, 'Margen %':v.margen
     }));
     const ws = XLSX.utils.json_to_sheet(data);

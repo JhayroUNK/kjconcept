@@ -204,6 +204,20 @@
               <label>Precio por hora (S/.)</label>
               <input type="number" step="0.01" min="0" id="trabajoPrecioHora" placeholder="8.00">
             </div>
+            <div class="field">
+              <label>Empaque</label>
+              <select id="trabajoEmpaque" class="select-input">
+                <option value="ninguno">Sin empaque</option>
+                <option value="bolsa">Bolsa (+S/. 0.50)</option>
+                <option value="caja">Caja (+S/. 1.00)</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Vendedora</label>
+              <label class="chk-label" style="margin-top:10px">
+                <input type="checkbox" id="trabajoComision"> Requiere vendedora (10% comisión sobre la utilidad)
+              </label>
+            </div>
             <div class="field field-wide">
               <label>Observaciones</label>
               <textarea id="trabajoObs" rows="2" placeholder="Notas del trabajo (opcional)"></textarea>
@@ -234,8 +248,16 @@
               <span class="tot-value" id="totCostoManoObra">S/. 0.00</span>
             </div>
             <div class="tot-item">
+              <span class="tot-label">Empaque</span>
+              <span class="tot-value" id="totCostoEmpaque">S/. 0.00</span>
+            </div>
+            <div class="tot-item">
               <span class="tot-label">Precio cobrado</span>
               <span class="tot-value" id="totPrecioCobrado">S/. 0.00</span>
+            </div>
+            <div class="tot-item">
+              <span class="tot-label">Comisión vendedora</span>
+              <span class="tot-value" id="totComision">S/. 0.00</span>
             </div>
             <div class="tot-item">
               <span class="tot-label">Ganancia</span>
@@ -514,6 +536,18 @@
             <div class="field">
               <label>Precio por corte (S/.)</label>
               <input type="number" step="0.01" min="0" id="cfgPrecioCorte" placeholder="0.30">
+            </div>
+            <div class="field">
+              <label>Comisión vendedora (%)</label>
+              <input type="number" step="1" min="0" id="cfgComisionPct" placeholder="10">
+            </div>
+            <div class="field">
+              <label>Precio empaque bolsa (S/.)</label>
+              <input type="number" step="0.01" min="0" id="cfgPrecioBolsa" placeholder="0.50">
+            </div>
+            <div class="field">
+              <label>Precio empaque caja (S/.)</label>
+              <input type="number" step="0.01" min="0" id="cfgPrecioCaja" placeholder="1.00">
             </div>
           </form>
           <div class="form-actions">
