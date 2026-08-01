@@ -249,6 +249,7 @@
             <option value="valor">Ordenar: Valor total</option>
             <option value="stock">Ordenar: Stock bajo primero</option>
           </select>
+          <button class="btn btn-secondary" id="btnRegistrarMerma">+ Registrar merma</button>
           <button class="btn btn-primary" id="btnNuevoMaterial">+ Nuevo material</button>
         </div>
         <div class="table-wrap card">
@@ -263,6 +264,22 @@
           </table>
           <div class="empty-state" id="invEmptyState" style="display:none">
             <p>No hay materiales registrados todavía.</p>
+          </div>
+        </div>
+
+        <div class="card panel-card" style="margin-top:16px">
+          <div class="card-head">
+            <h3>Merma — material dañado o perdido</h3>
+            <p class="muted">Si se malogró o perdiste algo de material, regístralo aquí: se descuenta del inventario y se contabiliza como pérdida, separada de tus gastos y de tus ventas.</p>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="tablaMermas">
+              <thead><tr><th>Fecha</th><th>Material</th><th>Cant.</th><th>Costo</th><th>Motivo</th><th></th></tr></thead>
+              <tbody id="tbodyMermas"></tbody>
+            </table>
+            <div class="empty-state" id="mermasEmptyState" style="display:none">
+              <p>No has registrado mermas todavía.</p>
+            </div>
           </div>
         </div>
       </section>
@@ -369,6 +386,14 @@
 
         <div class="card panel-card">
           <div class="card-head">
+            <h3>Distribución del ingreso</h3>
+            <p class="muted">De todo lo que entra por ventas, esto es lo que corresponde separar para cada cosa antes de tocar la ganancia.</p>
+          </div>
+          <div id="distribucionBody"></div>
+        </div>
+
+        <div class="card panel-card">
+          <div class="card-head">
             <h3>Gastos</h3>
             <button class="btn btn-secondary btn-sm" id="btnNuevoGasto">+ Nuevo gasto</button>
           </div>
@@ -407,6 +432,7 @@
             <button class="btn btn-secondary" id="btnExportVentas">Exportar Ventas (Excel)</button>
             <button class="btn btn-secondary" id="btnExportFinanzas">Exportar Finanzas (Excel)</button>
             <button class="btn btn-secondary" id="btnExportCompras">Exportar Compras (Excel)</button>
+            <button class="btn btn-secondary" id="btnExportMermas">Exportar Mermas (Excel)</button>
             <button class="btn btn-secondary" id="btnRespaldarJSON">Respaldar todo (JSON)</button>
             <label class="btn btn-secondary file-btn">Importar JSON
               <input type="file" id="inputImportarJSON" accept="application/json" hidden>

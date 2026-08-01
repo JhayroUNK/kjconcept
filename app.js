@@ -71,6 +71,7 @@ const KEYS = {
   compras: 'kj_compras',
   ventas: 'kj_ventas',
   gastos: 'kj_gastos',
+  mermas: 'kj_mermas',
   config: 'kj_configuracion'
 };
 
@@ -105,6 +106,7 @@ const Store = {
     if(!localStorage.getItem(KEYS.compras)) this._write(KEYS.compras, []);
     if(!localStorage.getItem(KEYS.ventas)) this._write(KEYS.ventas, []);
     if(!localStorage.getItem(KEYS.gastos)) this._write(KEYS.gastos, []);
+    if(!localStorage.getItem(KEYS.mermas)) this._write(KEYS.mermas, []);
     this.migrateConfig();
   },
 
@@ -136,6 +138,9 @@ const Store = {
   getGastos(){ return this._read(KEYS.gastos, []); },
   setGastos(arr){ return this._write(KEYS.gastos, arr); },
 
+  getMermas(){ return this._read(KEYS.mermas, []); },
+  setMermas(arr){ return this._write(KEYS.mermas, arr); },
+
   resetAll(){
     Object.values(KEYS).forEach(k => localStorage.removeItem(k));
     this.ensureDefaults();
@@ -148,7 +153,8 @@ const Store = {
       inventario: this.getInventario(),
       compras: this.getCompras(),
       ventas: this.getVentas(),
-      gastos: this.getGastos()
+      gastos: this.getGastos(),
+      mermas: this.getMermas()
     };
   },
   restoreJSON(data){
@@ -158,6 +164,7 @@ const Store = {
     if(Array.isArray(data.compras)) this.setCompras(data.compras);
     if(Array.isArray(data.ventas)) this.setVentas(data.ventas);
     if(Array.isArray(data.gastos)) this.setGastos(data.gastos);
+    if(Array.isArray(data.mermas)) this.setMermas(data.mermas);
   }
 };
 
@@ -173,14 +180,35 @@ const Calc = {
   materialConsumido(mesKey){ return this._byMonth(Store.getVentas(), mesKey).reduce((s,v)=>s+Number(v.costoTotalMateriales||0),0); },
   // Costo de mano de obra + impresión + corte de los trabajos (todo el histórico o del mes indicado)
   costoProduccionExtra(mesKey){ return this._byMonth(Store.getVentas(), mesKey).reduce((s,v)=>s+Number(v.costoManoObra||0)+Number(v.costoImpresion||0)+Number(v.costoCorte||0),0); },
+  // Solo mano de obra (lo que le corresponde al diseñador) — separado de impresión/corte a propósito
+  manoObraTotal(mesKey){ return this._byMonth(Store.getVentas(), mesKey).reduce((s,v)=>s+Number(v.costoManoObra||0),0); },
+  // Solo impresión + corte (desgaste/insumos de impresora y máquina de corte)
+  impresionCorteTotal(mesKey){ return this._byMonth(Store.getVentas(), mesKey).reduce((s,v)=>s+Number(v.costoImpresion||0)+Number(v.costoCorte||0),0); },
+  // Valor del material perdido/dañado (merma), separado de los gastos generales del negocio
+  mermaTotal(mesKey){ return this._byMonth(Store.getMermas(), mesKey).reduce((s,m)=>s+Number(m.costoTotal||0),0); },
   ventasTotales(mesKey){ return this._byMonth(Store.getVentas(), mesKey).reduce((s,v)=>s+Number(v.precioCobrado||0),0); },
   // Suma la ganancia ya calculada de cada venta (precio - materiales - impresión - corte - mano de obra)
   gananciaBruta(mesKey){ return this._byMonth(Store.getVentas(), mesKey).reduce((s,v)=>s+Number(v.ganancia||0),0); },
   gastosTotales(mesKey){ return this._byMonth(Store.getGastos(), mesKey).reduce((s,g)=>s+Number(g.monto||0),0); },
-  utilidadNeta(mesKey){ return this.gananciaBruta(mesKey) - this.gastosTotales(mesKey); },
+  // Ganancia bruta de las ventas, menos gastos generales, menos lo perdido en merma
+  utilidadNeta(mesKey){ return this.gananciaBruta(mesKey) - this.gastosTotales(mesKey) - this.mermaTotal(mesKey); },
   capitalDisponible(){
     const cfg = Store.getConfig();
     return Number(cfg.capitalInicial||0) + this.ventasTotales() - this.inversionTotal() - this.gastosTotales();
+  },
+  // Desglose de "en qué se va" cada sol vendido: cuánto es para reponer materiales,
+  // cuánto para el diseñador (mano de obra), cuánto para la impresora/cameo, cuánto
+  // se perdió en merma, cuánto en gastos generales (incluye inversión en máquinas,
+  // pasajes, etc.) y cuánto queda realmente como ganancia del negocio.
+  distribucionIngresos(mesKey){
+    const ventas = this.ventasTotales(mesKey);
+    const materiales = this.materialConsumido(mesKey);
+    const impresionCorte = this.impresionCorteTotal(mesKey);
+    const manoObra = this.manoObraTotal(mesKey);
+    const merma = this.mermaTotal(mesKey);
+    const gastos = this.gastosTotales(mesKey);
+    const gananciaNeta = ventas - materiales - impresionCorte - manoObra - merma - gastos;
+    return {ventas, materiales, impresionCorte, manoObra, merma, gastos, gananciaNeta};
   },
   trabajosRealizados(mesKey){ return this._byMonth(Store.getVentas(), mesKey).length; },
   materialesEnInventario(){ return Store.getInventario().length; },
@@ -462,7 +490,9 @@ const DashboardView = {
     const inv = Calc.inversionTotal(periodo);
     const valInv = Calc.valorInventarioActual();
     const matCons = Calc.materialConsumido(periodo);
-    const prodExtra = Calc.costoProduccionExtra(periodo);
+    const manoObra = Calc.manoObraTotal(periodo);
+    const impresionCorte = Calc.impresionCorteTotal(periodo);
+    const merma = Calc.mermaTotal(periodo);
     const ventas = Calc.ventasTotales(periodo);
     const gBruta = Calc.gananciaBruta(periodo);
     const gastos = Calc.gastosTotales(periodo);
@@ -476,7 +506,9 @@ const DashboardView = {
       {label:'Compras'+sufijo, value: Utils.money(inv), tone:''},
       {label:'Valor actual del inventario', value: Utils.money(valInv), tone:'accent'},
       {label:'Material consumido'+sufijo, value: Utils.money(matCons), tone:''},
-      {label:'Mano de obra + impresión/corte'+sufijo, value: Utils.money(prodExtra), tone:''},
+      {label:'Mano de obra (diseñador)'+sufijo, value: Utils.money(manoObra), tone:''},
+      {label:'Impresión y corte'+sufijo, value: Utils.money(impresionCorte), tone:''},
+      {label:'Merma'+sufijo, value: Utils.money(merma), tone: merma>0?'danger':''},
       {label:'Ventas'+sufijo, value: Utils.money(ventas), tone:'success'},
       {label:'Ganancia bruta'+sufijo, value: Utils.money(gBruta), tone: gBruta>=0?'success':'danger'},
       {label:'Gastos'+sufijo, value: Utils.money(gastos), tone:'warning'},
@@ -777,11 +809,13 @@ const NuevoTrabajoView = {
 const InventarioView = {
   init(){
     document.getElementById('btnNuevoMaterial').onclick = ()=> this.openForm();
+    document.getElementById('btnRegistrarMerma').onclick = ()=> this.openMermaForm();
     document.getElementById('invSearch').oninput = Utils.debounce(()=> this.render(), 200);
     document.getElementById('invFiltroCategoria').onchange = ()=> this.render();
     document.getElementById('invOrden').onchange = ()=> this.render();
     this.populateCategoriaFilter();
     this.render();
+    this.renderMermas();
   },
   populateCategoriaFilter(){
     const cfg = Store.getConfig();
@@ -888,6 +922,99 @@ const InventarioView = {
       Toast.show('success','Material eliminado.');
       this.render();
       App.refreshBadges();
+    });
+  },
+
+  /* ---- MERMA: material dañado / perdido ---- */
+  openMermaForm(){
+    const inv = Store.getInventario();
+    if(inv.length === 0){ Toast.show('warning','Primero registra materiales en Inventario.'); return; }
+    const motivos = ['Dañado en impresión','Error de corte','Vencido / deteriorado','Pérdida o robo','Otro'];
+    const bodyHtml = `
+      <div class="field">
+        <label>Material</label>
+        <select id="mmMaterial">
+          <option value="">Selecciona…</option>
+          ${inv.map(m=>`<option value="${m.id}">${Utils.escapeHtml(m.nombre)} (${Utils.num(m.cantidad,1)} ${Utils.escapeHtml(m.unidad)} disp.)</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>Cantidad perdida</label><input type="number" step="0.01" min="0" id="mmCantidad" placeholder="0"></div>
+      <div class="field"><label>Costo estimado</label><input type="text" id="mmCostoPreview" value="${Utils.money(0)}" disabled></div>
+      <div class="field"><label>Motivo</label><select id="mmMotivo">${motivos.map(m=>`<option>${m}</option>`).join('')}</select></div>
+      <div class="field"><label>Fecha</label><input type="date" id="mmFecha" value="${Utils.todayISO()}"></div>
+      <div class="field"><label>Observaciones</label><input type="text" id="mmObs" placeholder="Opcional"></div>
+    `;
+    Modal.open({
+      title:'Registrar merma',
+      bodyHtml,
+      onMount:(overlay)=>{
+        const updatePreview = ()=>{
+          const matId = overlay.querySelector('#mmMaterial').value;
+          const mat = inv.find(m=>m.id===matId);
+          const cant = Number(overlay.querySelector('#mmCantidad').value)||0;
+          overlay.querySelector('#mmCostoPreview').value = Utils.money(mat ? mat.costoPromedio*cant : 0);
+        };
+        overlay.querySelector('#mmMaterial').onchange = updatePreview;
+        overlay.querySelector('#mmCantidad').oninput = updatePreview;
+      },
+      footButtons: [
+        {label:'Cancelar', className:'btn-ghost', onClick: ()=>Modal.close()},
+        {label:'Registrar merma', className:'btn-danger', onClick: ()=>{
+          const matId = document.getElementById('mmMaterial').value;
+          const cantidad = Number(document.getElementById('mmCantidad').value)||0;
+          const motivo = document.getElementById('mmMotivo').value;
+          const fecha = document.getElementById('mmFecha').value || Utils.todayISO();
+          const obs = document.getElementById('mmObs').value.trim();
+          const list = Store.getInventario();
+          const mat = list.find(m=>m.id===matId);
+          if(!mat){ Toast.show('warning','Selecciona un material.'); return; }
+          if(!cantidad || cantidad<=0){ Toast.show('warning','Ingresa una cantidad válida.'); return; }
+          if(cantidad > Number(mat.cantidad)){
+            Toast.show('error', `Solo tienes ${Utils.num(mat.cantidad,1)} ${mat.unidad} de "${mat.nombre}" en stock.`);
+            return;
+          }
+          mat.cantidad = Number(mat.cantidad) - cantidad;
+          Store.setInventario(list);
+
+          const costoTotal = Number(mat.costoPromedio) * cantidad;
+          const mermas = Store.getMermas();
+          mermas.push({
+            id: Utils.uid(), fecha, materialId: mat.id, materialNombre: mat.nombre,
+            cantidad, unidad: mat.unidad, costoUnitario: Number(mat.costoPromedio),
+            costoTotal, motivo, observaciones: obs
+          });
+          Store.setMermas(mermas);
+
+          Toast.show('success', `Merma registrada: ${Utils.money(costoTotal)} en pérdida.`);
+          Modal.close();
+          this.render();
+          this.renderMermas();
+          App.refreshBadges();
+        }}
+      ]
+    });
+  },
+  renderMermas(){
+    const mermas = [...Store.getMermas()].sort((a,b)=> b.fecha.localeCompare(a.fecha)).slice(0,50);
+    const tbody = document.getElementById('tbodyMermas');
+    if(!tbody) return;
+    document.getElementById('mermasEmptyState').style.display = mermas.length? 'none':'block';
+    tbody.innerHTML = mermas.map(m=>`
+      <tr>
+        <td>${Utils.formatDate(m.fecha)}</td>
+        <td class="wrap">${Utils.escapeHtml(m.materialNombre)}</td>
+        <td>${Utils.num(m.cantidad,1)} ${Utils.escapeHtml(m.unidad)}</td>
+        <td>${Utils.money(m.costoTotal)}</td>
+        <td><span class="tag low">${Utils.escapeHtml(m.motivo||'—')}</span></td>
+        <td><button class="row-icon-btn danger" data-del="${m.id}" title="Eliminar">🗑</button></td>
+      </tr>`).join('');
+    tbody.querySelectorAll('[data-del]').forEach(b=> b.onclick = ()=>{
+      Modal.confirm('¿Eliminar este registro de merma? (El material no se devolverá automáticamente al inventario)', ()=>{
+        Store.setMermas(Store.getMermas().filter(m=>m.id!==b.dataset.del));
+        Toast.show('success','Merma eliminada.');
+        this.renderMermas();
+        App.refreshBadges();
+      });
     });
   }
 };
@@ -1042,9 +1169,13 @@ const HistorialView = {
         <td>${Utils.money(v.costoTotalMateriales)}</td>
         <td class="${v.ganancia>=0?'':''}" style="color:${v.ganancia>=0?'var(--success)':'var(--danger)'}">${Utils.money(v.ganancia)}</td>
         <td>${Utils.pct(v.margen)}</td>
-        <td><button class="row-icon-btn" data-detail="${v.id}">Ver</button></td>
+        <td>
+          <button class="row-icon-btn" data-detail="${v.id}">Ver</button>
+          <button class="row-icon-btn" data-edit="${v.id}" title="Editar venta">✎</button>
+        </td>
       </tr>`).join('');
     tbody.querySelectorAll('[data-detail]').forEach(b=> b.onclick = ()=> this.showDetail(b.dataset.detail));
+    tbody.querySelectorAll('[data-edit]').forEach(b=> b.onclick = ()=> this.openEditForm(b.dataset.edit));
   },
   showDetail(id){
     const v = Store.getVentas().find(x=>x.id===id);
@@ -1076,6 +1207,7 @@ const HistorialView = {
         ${v.observaciones? `<p class="muted" style="margin-top:12px">Notas: ${Utils.escapeHtml(v.observaciones)}</p>`:''}
       `,
       footButtons: [
+        {label:'Editar venta', className:'btn-primary', onClick: ()=>{ Modal.close(); HistorialView.openEditForm(id); }},
         {label:'Eliminar venta', className:'btn-danger', onClick: ()=>{
           Modal.confirm('¿Eliminar esta venta del historial? (El inventario ya descontado no se restaurará automáticamente)', ()=>{
             Store.setVentas(Store.getVentas().filter(x=>x.id!==id));
@@ -1087,6 +1219,249 @@ const HistorialView = {
         {label:'Cerrar', className:'btn-secondary', onClick: ()=>Modal.close()}
       ]
     });
+  },
+
+  /* ---- EDITAR VENTA ---- */
+  openEditForm(id){
+    const venta = Store.getVentas().find(x=>x.id===id);
+    if(!venta){ Toast.show('error','No se encontró la venta.'); return; }
+    const cfg = Store.getConfig();
+    // Estado local de edición: filas de materiales partiendo de lo ya registrado en la venta
+    this._edit = {
+      ventaId: id,
+      rows: (venta.materiales||[]).map(m=>({rowId:Utils.uid(), materialId:m.materialId, cantidad:Number(m.cantidad||0), impresion:!!m.impresion, corte:!!m.corte}))
+    };
+    const bodyHtml = `
+      <div class="form-grid">
+        <div class="field"><label>Nombre del trabajo</label><input type="text" id="editNombre" value="${Utils.escapeHtml(venta.nombreTrabajo||'')}"></div>
+        <div class="field"><label>Cliente</label><input type="text" id="editCliente" value="${Utils.escapeHtml(venta.cliente||'')}"></div>
+        <div class="field"><label>Fecha</label><input type="date" id="editFecha" value="${venta.fecha||Utils.todayISO()}"></div>
+        <div class="field"><label>Precio cobrado</label><input type="number" step="0.01" min="0" id="editPrecio" value="${venta.precioCobrado||0}"></div>
+        <div class="field"><label>Horas hombre trabajadas</label><input type="number" step="0.25" min="0" id="editHoras" value="${venta.horasHombre||0}"></div>
+        <div class="field"><label>Precio por hora (S/.)</label><input type="number" step="0.01" min="0" id="editPrecioHora" value="${venta.precioHoraHombre ?? cfg.precioHoraHombre ?? 8}"></div>
+        <div class="field field-wide"><label>Observaciones</label><textarea id="editObs" rows="2">${Utils.escapeHtml(venta.observaciones||'')}</textarea></div>
+      </div>
+      <div class="materials-block">
+        <div class="materials-head">
+          <h4>Materiales utilizados</h4>
+          <button class="btn btn-secondary btn-sm" id="editBtnAgregarMaterial" type="button">+ Agregar material</button>
+        </div>
+        <div id="editMaterialRows" class="material-rows"></div>
+        <div class="empty-hint" id="editMaterialRowsEmpty">Sin materiales agregados.</div>
+      </div>
+      <div class="totals-strip" style="margin-top:14px">
+        <div class="tot-item"><span class="tot-label">Costo materiales</span><span class="tot-value" id="editTotCostoMateriales">S/. 0.00</span></div>
+        <div class="tot-item"><span class="tot-label">Impresión + corte</span><span class="tot-value" id="editTotCostoImpresionCorte">S/. 0.00</span></div>
+        <div class="tot-item"><span class="tot-label">Mano de obra</span><span class="tot-value" id="editTotCostoManoObra">S/. 0.00</span></div>
+        <div class="tot-item"><span class="tot-label">Precio cobrado</span><span class="tot-value" id="editTotPrecioCobrado">S/. 0.00</span></div>
+        <div class="tot-item"><span class="tot-label">Ganancia</span><span class="tot-value accent-text" id="editTotGanancia">S/. 0.00</span></div>
+        <div class="tot-item"><span class="tot-label">Margen</span><span class="tot-value" id="editTotMargen">0%</span></div>
+      </div>
+    `;
+    Modal.open({
+      title: 'Editar venta',
+      bodyHtml,
+      onMount:(overlay)=>{
+        overlay.querySelector('#editBtnAgregarMaterial').onclick = ()=> this._editAddRow(overlay);
+        ['editPrecio','editHoras','editPrecioHora'].forEach(fid=>{
+          overlay.querySelector('#'+fid).oninput = ()=> this._editUpdateTotals(overlay);
+        });
+        this._editRenderRows(overlay);
+      },
+      footButtons: [
+        {label:'Cancelar', className:'btn-ghost', onClick: ()=>Modal.close()},
+        {label:'Guardar cambios', className:'btn-primary', onClick: ()=> this._editSave(id)}
+      ]
+    });
+  },
+  // Inventario "virtual": stock actual + lo que esta venta ya tenía reservado
+  // (así, al editar, no choca contra su propio consumo original)
+  _editStockDisponible(materialId, venta){
+    const inv = Store.getInventario();
+    const mat = inv.find(m=>m.id===materialId);
+    if(!mat) return {mat:null, disponible:0};
+    const reservadoOriginal = (venta.materiales||[]).filter(m=>m.materialId===materialId).reduce((s,m)=>s+Number(m.cantidad||0),0);
+    return {mat, disponible: Number(mat.cantidad) + reservadoOriginal};
+  },
+  _editAddRow(overlay){
+    const inv = Store.getInventario();
+    if(inv.length === 0){ Toast.show('warning','Primero registra materiales en Inventario.'); return; }
+    this._edit.rows.push({rowId:Utils.uid(), materialId:'', cantidad:0, impresion:false, corte:false});
+    this._editRenderRows(overlay);
+  },
+  _editRemoveRow(overlay, rowId){
+    this._edit.rows = this._edit.rows.filter(r=>r.rowId!==rowId);
+    this._editRenderRows(overlay);
+  },
+  _editRenderRows(overlay){
+    const venta = Store.getVentas().find(x=>x.id===this._edit.ventaId);
+    const inv = Store.getInventario();
+    const cfg = Store.getConfig();
+    const wrap = overlay.querySelector('#editMaterialRows');
+    overlay.querySelector('#editMaterialRowsEmpty').style.display = this._edit.rows.length? 'none':'block';
+    wrap.innerHTML = this._edit.rows.map(r=>{
+      const mat = inv.find(m=>m.id===r.materialId);
+      const costoUnit = mat ? Number(mat.costoPromedio) : 0;
+      const cant = Number(r.cantidad||0);
+      const costoTotal = costoUnit * cant;
+      const costoImpresion = r.impresion ? cant * Number(cfg.precioImpresionHoja||0) : 0;
+      const costoCorte = r.corte ? cant * Number(cfg.precioCorte||0) : 0;
+      return `
+      <div class="material-row" data-row="${r.rowId}">
+        <div class="material-row-main">
+          <div class="field">
+            <label>Material</label>
+            <select class="emr-material" data-row="${r.rowId}">
+              <option value="">Selecciona…</option>
+              ${inv.map(m=>{
+                const {disponible} = this._editStockDisponible(m.id, venta);
+                return `<option value="${m.id}" ${m.id===r.materialId?'selected':''}>${Utils.escapeHtml(m.nombre)} (${Utils.num(disponible,1)} ${Utils.escapeHtml(m.unidad)} disp.)</option>`;
+              }).join('')}
+            </select>
+          </div>
+          <div class="field"><label>Cantidad usada</label><input type="number" step="0.01" min="0" class="emr-cantidad" data-row="${r.rowId}" value="${r.cantidad||''}"></div>
+          <div class="field"><label>Unidad</label><input type="text" value="${mat?Utils.escapeHtml(mat.unidad):'—'}" disabled></div>
+          <div class="field"><label>Costo unitario</label><input type="text" value="${Utils.money(costoUnit)}" disabled></div>
+          <div class="field"><label>Costo usado</label><input type="text" class="emr-costo-usado" value="${Utils.money(costoTotal)}" disabled></div>
+          <button class="material-row-remove" data-row="${r.rowId}" type="button" title="Eliminar">✕</button>
+        </div>
+        <div class="material-row-extra">
+          <label class="chk-label"><input type="checkbox" class="emr-impresion" data-row="${r.rowId}" ${r.impresion?'checked':''}> Impresión (${Utils.money(cfg.precioImpresionHoja||0)} / hoja)</label>
+          <label class="chk-label"><input type="checkbox" class="emr-corte" data-row="${r.rowId}" ${r.corte?'checked':''}> Corte (${Utils.money(cfg.precioCorte||0)} / unid.)</label>
+          <span class="extra-cost emr-extra-cost">+ ${Utils.money(costoImpresion+costoCorte)}</span>
+        </div>
+      </div>`;
+    }).join('');
+
+    wrap.querySelectorAll('.emr-material').forEach(sel=>{
+      sel.onchange = (e)=>{
+        const r = this._edit.rows.find(x=>x.rowId===e.target.dataset.row);
+        r.materialId = e.target.value;
+        this._editRenderRows(overlay);
+      };
+    });
+    wrap.querySelectorAll('.emr-cantidad').forEach(inp=>{
+      inp.oninput = (e)=>{
+        const r = this._edit.rows.find(x=>x.rowId===e.target.dataset.row);
+        r.cantidad = Number(e.target.value)||0;
+        this._editRenderRows(overlay);
+      };
+    });
+    wrap.querySelectorAll('.emr-impresion').forEach(chk=>{
+      chk.onchange = (e)=>{
+        const r = this._edit.rows.find(x=>x.rowId===e.target.dataset.row);
+        r.impresion = e.target.checked;
+        this._editRenderRows(overlay);
+      };
+    });
+    wrap.querySelectorAll('.emr-corte').forEach(chk=>{
+      chk.onchange = (e)=>{
+        const r = this._edit.rows.find(x=>x.rowId===e.target.dataset.row);
+        r.corte = e.target.checked;
+        this._editRenderRows(overlay);
+      };
+    });
+    wrap.querySelectorAll('.material-row-remove').forEach(btn=>{
+      btn.onclick = (e)=> this._editRemoveRow(overlay, e.target.dataset.row);
+    });
+    this._editUpdateTotals(overlay);
+  },
+  _editUpdateTotals(overlay){
+    const inv = Store.getInventario();
+    const cfg = Store.getConfig();
+    let costoMateriales = 0, costoImpresionCorte = 0;
+    this._edit.rows.forEach(r=>{
+      const mat = inv.find(m=>m.id===r.materialId);
+      if(!mat) return;
+      const cant = Number(r.cantidad||0);
+      costoMateriales += Number(mat.costoPromedio) * cant;
+      if(r.impresion) costoImpresionCorte += cant * Number(cfg.precioImpresionHoja||0);
+      if(r.corte) costoImpresionCorte += cant * Number(cfg.precioCorte||0);
+    });
+    const horas = Number(overlay.querySelector('#editHoras').value)||0;
+    const precioHora = Number(overlay.querySelector('#editPrecioHora').value)||0;
+    const costoManoObra = horas * precioHora;
+    const costoProduccion = costoMateriales + costoImpresionCorte + costoManoObra;
+    const precio = Number(overlay.querySelector('#editPrecio').value)||0;
+    const ganancia = precio - costoProduccion;
+    const margen = Calc.margen(precio, costoProduccion);
+    overlay.querySelector('#editTotCostoMateriales').textContent = Utils.money(costoMateriales);
+    overlay.querySelector('#editTotCostoImpresionCorte').textContent = Utils.money(costoImpresionCorte);
+    overlay.querySelector('#editTotCostoManoObra').textContent = Utils.money(costoManoObra);
+    overlay.querySelector('#editTotPrecioCobrado').textContent = Utils.money(precio);
+    overlay.querySelector('#editTotGanancia').textContent = Utils.money(ganancia);
+    overlay.querySelector('#editTotMargen').textContent = Utils.pct(margen);
+  },
+  _editSave(id){
+    const venta = Store.getVentas().find(x=>x.id===id);
+    if(!venta) return;
+    const nombre = document.getElementById('editNombre').value.trim();
+    const precio = Number(document.getElementById('editPrecio').value);
+    if(!nombre){ Toast.show('warning','Escribe el nombre del trabajo.'); return; }
+    if(!precio || precio<=0){ Toast.show('warning','Ingresa un precio cobrado válido.'); return; }
+    if(this._edit.rows.some(r=>!r.materialId)){ Toast.show('warning','Selecciona un material en cada fila, o elimínala.'); return; }
+
+    const cfg = Store.getConfig();
+    const inv = Store.getInventario();
+
+    // Valida stock disponible considerando lo que esta venta ya tenía reservado
+    const usados = [];
+    for(const r of this._edit.rows){
+      const {mat, disponible} = this._editStockDisponible(r.materialId, venta);
+      const cant = Number(r.cantidad||0);
+      if(!mat || cant<=0){ Toast.show('warning','Revisa las cantidades de los materiales.'); return; }
+      if(cant > disponible){
+        Toast.show('error', `Stock insuficiente de "${mat.nombre}". Disponible: ${Utils.num(disponible,1)} ${mat.unidad}.`);
+        return;
+      }
+      const costoImpresion = r.impresion ? cant * Number(cfg.precioImpresionHoja||0) : 0;
+      const costoCorte = r.corte ? cant * Number(cfg.precioCorte||0) : 0;
+      usados.push({
+        materialId:mat.id, nombre:mat.nombre, cantidad:cant, unidad:mat.unidad,
+        costoUnitario:Number(mat.costoPromedio), costoTotal: Number(mat.costoPromedio)*cant,
+        impresion: !!r.impresion, corte: !!r.corte, costoImpresion, costoCorte
+      });
+    }
+
+    // Devuelve al inventario lo que esta venta había consumido originalmente…
+    (venta.materiales||[]).forEach(m=>{
+      const mat = inv.find(x=>x.id===m.materialId);
+      if(mat) mat.cantidad = Number(mat.cantidad) + Number(m.cantidad||0);
+    });
+    // …y descuenta lo nuevo
+    usados.forEach(u=>{
+      const mat = inv.find(x=>x.id===u.materialId);
+      if(mat) mat.cantidad = Number(mat.cantidad) - u.cantidad;
+    });
+    Store.setInventario(inv);
+
+    const costoTotalMateriales = usados.reduce((s,u)=>s+u.costoTotal,0);
+    const costoImpresion = usados.reduce((s,u)=>s+u.costoImpresion,0);
+    const costoCorte = usados.reduce((s,u)=>s+u.costoCorte,0);
+    const horasHombre = Number(document.getElementById('editHoras').value)||0;
+    const precioHoraHombre = Number(document.getElementById('editPrecioHora').value)||0;
+    const costoManoObra = horasHombre * precioHoraHombre;
+    const costoProduccionTotal = costoTotalMateriales + costoImpresion + costoCorte + costoManoObra;
+    const ganancia = precio - costoProduccionTotal;
+    const margen = Calc.margen(precio, costoProduccionTotal);
+
+    Object.assign(venta, {
+      nombreTrabajo: nombre,
+      cliente: document.getElementById('editCliente').value.trim(),
+      fecha: document.getElementById('editFecha').value || venta.fecha,
+      precioCobrado: precio,
+      observaciones: document.getElementById('editObs').value.trim(),
+      materiales: usados,
+      costoTotalMateriales, costoImpresion, costoCorte,
+      horasHombre, precioHoraHombre, costoManoObra,
+      costoProduccionTotal, ganancia, margen
+    });
+    Store.setVentas(Store.getVentas().map(v=> v.id===id ? venta : v));
+
+    Toast.show('success','Venta actualizada.');
+    Modal.close();
+    this.render();
+    App.refreshBadges();
   }
 };
 
@@ -1101,6 +1476,7 @@ const FinanzasView = {
     document.getElementById('btnExportVentas').onclick = ()=> Exporter.ventas();
     document.getElementById('btnExportFinanzas').onclick = ()=> Exporter.finanzas();
     document.getElementById('btnExportCompras').onclick = ()=> Exporter.compras();
+    document.getElementById('btnExportMermas').onclick = ()=> Exporter.mermas();
     document.getElementById('btnRespaldarJSON').onclick = ()=> Exporter.backupJSON();
     document.getElementById('inputImportarJSON').onchange = (e)=> Exporter.importJSON(e);
     document.getElementById('btnResetApp').onclick = ()=>{
@@ -1117,6 +1493,7 @@ const FinanzasView = {
     document.getElementById('capitalInicialInput').value = cfg.capitalInicial || 0;
     this.renderKpis();
     this.renderEstado();
+    this.renderDistribucion();
     this.renderGastos();
     Charts.renderAll();
   },
@@ -1135,7 +1512,9 @@ const FinanzasView = {
       {label:'Dinero recuperado', value: Utils.money(Calc.ventasTotales())},
       {label:'Dinero aún invertido (inventario)', value: Utils.money(Calc.valorInventarioActual())},
       {label:'Material consumido', value: Utils.money(Calc.materialConsumido())},
-      {label:'Mano de obra + impresión/corte', value: Utils.money(Calc.costoProduccionExtra())},
+      {label:'Mano de obra (diseñador)', value: Utils.money(Calc.manoObraTotal())},
+      {label:'Impresión y corte (impresora/cameo)', value: Utils.money(Calc.impresionCorteTotal())},
+      {label:'Merma (material dañado/perdido)', value: Utils.money(Calc.mermaTotal()), tone: Calc.mermaTotal()>0?'danger':''},
       {label:'Gastos totales', value: Utils.money(Calc.gastosTotales())},
       {label:'Utilidad neta', value: Utils.money(Calc.utilidadNeta()), tone: Calc.utilidadNeta()>=0?'success':'danger'},
       {label:'Capital disponible para reinvertir', value: Utils.money(Calc.capitalDisponible()), tone:'accent', big:true}
@@ -1160,6 +1539,38 @@ const FinanzasView = {
         <p class="estado-explain">Ganancia real: ${Utils.money(Calc.utilidadNeta())}</p>`;
     }
   },
+  renderDistribucion(){
+    const d = Calc.distribucionIngresos();
+    const body = document.getElementById('distribucionBody');
+    if(!body) return;
+    if(d.ventas <= 0){
+      body.innerHTML = `<p class="muted">Aún no registras ventas — este desglose aparecerá apenas registres tu primer trabajo.</p>`;
+      return;
+    }
+    const pct = (n)=> Math.max(0, Math.min(100, (n/d.ventas)*100));
+    const rows = [
+      {label:'Materiales', hint:'para reponer stock de insumos', value:d.materiales, color:'var(--accent)'},
+      {label:'Impresión y corte', hint:'mantenimiento/insumos de impresora y cameo', value:d.impresionCorte, color:'var(--teal)'},
+      {label:'Mano de obra', hint:'lo que le corresponde al diseñador', value:d.manoObra, color:'var(--pink)'},
+      {label:'Merma', hint:'material dañado o perdido', value:d.merma, color:'var(--warning)'},
+      {label:'Otros gastos', hint:'publicidad, herramientas, inversión en máquinas, pasajes, etc.', value:d.gastos, color:'var(--danger)'}
+    ];
+    body.innerHTML = rows.map(r=>`
+      <div class="dist-row">
+        <div class="dist-row-top">
+          <span class="dist-row-label">${r.label}<span class="dist-row-hint">${r.hint}</span></span>
+          <span class="dist-row-right"><span class="dist-row-pct">${pct(r.value).toFixed(0)}%</span><span class="dist-row-value">${Utils.money(r.value)}</span></span>
+        </div>
+        <div class="dist-bar-track"><div class="dist-bar-fill" style="width:${pct(r.value)}%; background:${r.color}"></div></div>
+      </div>`).join('') + `
+      <div class="dist-row total">
+        <div class="dist-row-top">
+          <span class="dist-row-label">Ganancia neta del negocio<span class="dist-row-hint">lo que realmente te queda, sobre ${Utils.money(d.ventas)} vendidos</span></span>
+          <span class="dist-row-right"><span class="dist-row-pct">${pct(d.gananciaNeta).toFixed(0)}%</span><span class="dist-row-value" style="color:${d.gananciaNeta>=0?'var(--success)':'var(--danger)'}">${Utils.money(d.gananciaNeta)}</span></span>
+        </div>
+        <div class="dist-bar-track"><div class="dist-bar-fill" style="width:${pct(d.gananciaNeta)}%; background:${d.gananciaNeta>=0?'var(--success)':'var(--danger)'}"></div></div>
+      </div>`;
+  },
   renderGastos(){
     const gastos = [...Store.getGastos()].sort((a,b)=> b.fecha.localeCompare(a.fecha));
     const tbody = document.getElementById('tbodyGastos');
@@ -1182,7 +1593,7 @@ const FinanzasView = {
     });
   },
   openGastoForm(){
-    const categoriasGasto = ['Publicidad','Gasolina','Delivery','Empaques','Luz','Internet','Herramientas','Mantenimiento','Otros'];
+    const categoriasGasto = ['Publicidad','Gasolina','Pasajes / Movilidad','Delivery','Empaques','Luz','Internet','Herramientas','Mantenimiento','Inversión en máquinas','Otros'];
     Modal.open({
       title:'Nuevo gasto',
       bodyHtml: `
@@ -1296,6 +1707,9 @@ const Exporter = {
       'Inversion Total': Calc.inversionTotal(),
       'Valor Inventario Actual': Calc.valorInventarioActual(),
       'Material Consumido': Calc.materialConsumido(),
+      'Mano de Obra (Diseñador)': Calc.manoObraTotal(),
+      'Impresion y Corte': Calc.impresionCorteTotal(),
+      'Merma': Calc.mermaTotal(),
       'Ventas Totales': Calc.ventasTotales(),
       'Ganancia Bruta': Calc.gananciaBruta(),
       'Gastos Totales': Calc.gastosTotales(),
@@ -1309,6 +1723,16 @@ const Exporter = {
     XLSX.utils.book_append_sheet(wb, ws, 'Resumen Finanzas');
     XLSX.utils.book_append_sheet(wb, wsGastos, 'Gastos');
     this._download(wb, 'KJConcept_Finanzas.xlsx');
+  },
+  mermas(){
+    const data = Store.getMermas().map(m=>({
+      Fecha:m.fecha, Material:m.materialNombre, Cantidad:m.cantidad, Unidad:m.unidad,
+      'Costo Unitario':m.costoUnitario, 'Costo Total':m.costoTotal, Motivo:m.motivo, Observaciones:m.observaciones||''
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Mermas');
+    this._download(wb, 'KJConcept_Mermas.xlsx');
   },
   backupJSON(){
     const data = Store.backupJSON();
@@ -1419,7 +1843,7 @@ const App = {
   renderCurrentView(){
     switch(this.currentTab){
       case 'dashboard': DashboardView.render(); break;
-      case 'inventario': InventarioView.populateCategoriaFilter(); InventarioView.render(); break;
+      case 'inventario': InventarioView.populateCategoriaFilter(); InventarioView.render(); InventarioView.renderMermas(); break;
       case 'compras': ComprasView.populateDatalists(); ComprasView.render(); break;
       case 'historial': HistorialView.render(); break;
       case 'finanzas': FinanzasView.render(); break;
@@ -1436,7 +1860,7 @@ const App = {
 
     if(this.currentTab === 'dashboard') DashboardView.render();
     if(this.currentTab === 'finanzas') FinanzasView.render();
-    if(this.currentTab === 'inventario') InventarioView.render();
+    if(this.currentTab === 'inventario'){ InventarioView.render(); InventarioView.renderMermas(); }
     if(this.currentTab === 'compras') ComprasView.render();
   }
 };

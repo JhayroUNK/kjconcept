@@ -501,6 +501,21 @@ textarea{ resize: vertical; font-family: inherit; }
 .detail-mat-list{ display:flex; flex-direction:column; gap:8px; margin-top:10px; }
 .detail-mat-row{ display:flex; justify-content:space-between; font-size:13px; padding:8px 10px; background: var(--surface-alt); border-radius:8px; }
 
+/* Distribución del ingreso (Finanzas) */
+.dist-row{ padding:12px 0; border-bottom:1px solid var(--border-soft); display:flex; flex-direction:column; gap:6px; }
+.dist-row:last-child{ border-bottom:none; }
+.dist-row-top{ display:flex; justify-content:space-between; align-items:baseline; gap:10px; }
+.dist-row-label{ font-size:13.5px; font-weight:600; }
+.dist-row-hint{ display:block; font-size:11.5px; font-weight:400; color: var(--text-dim); margin-top:1px; }
+.dist-row-right{ display:flex; align-items:baseline; gap:8px; white-space:nowrap; }
+.dist-row-pct{ font-size:11.5px; color: var(--text-dim); font-family: var(--font-mono); }
+.dist-row-value{ font-family: var(--font-mono); font-size:14px; font-weight:600; }
+.dist-bar-track{ height:7px; border-radius:5px; background: var(--surface-alt); overflow:hidden; }
+.dist-bar-fill{ height:100%; border-radius:5px; }
+.dist-row.total{ margin-top:6px; padding-top:16px; border-top:2px solid var(--border-soft); border-bottom:none; }
+.dist-row.total .dist-row-label{ font-size:15px; }
+.dist-row.total .dist-row-value{ font-size:18px; }
+
 /* ==========================================================================
    SKELETON LOADING
    ========================================================================== */
