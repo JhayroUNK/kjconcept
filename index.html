@@ -99,6 +99,18 @@
         <div class="skeleton-wrap" id="dashboardSkeleton"></div>
         <div id="dashboardContent" style="display:none">
 
+          <div class="dash-toolbar">
+            <div class="seg-toggle" id="dashViewToggle">
+              <button class="seg-btn active" data-mode="mes" type="button">Este mes</button>
+              <button class="seg-btn" data-mode="general" type="button">General (histórico)</button>
+            </div>
+            <div class="dash-month-nav" id="dashMonthNav">
+              <button class="row-icon-btn" id="dashMonthPrev" type="button">‹</button>
+              <span id="dashMonthLabel" class="dash-month-label"></span>
+              <button class="row-icon-btn" id="dashMonthNext" type="button">›</button>
+            </div>
+          </div>
+
           <div class="kpi-grid" id="kpiGrid"></div>
 
           <div class="panel-row">
@@ -164,6 +176,14 @@
               <label>Precio cobrado</label>
               <input type="number" step="0.01" min="0" id="trabajoPrecio" placeholder="0.00" required>
             </div>
+            <div class="field">
+              <label>Horas hombre trabajadas</label>
+              <input type="number" step="0.25" min="0" id="trabajoHoras" placeholder="0">
+            </div>
+            <div class="field">
+              <label>Precio por hora (S/.)</label>
+              <input type="number" step="0.01" min="0" id="trabajoPrecioHora" placeholder="8.00">
+            </div>
             <div class="field field-wide">
               <label>Observaciones</label>
               <textarea id="trabajoObs" rows="2" placeholder="Notas del trabajo (opcional)"></textarea>
@@ -175,14 +195,23 @@
               <h4>Materiales utilizados</h4>
               <button class="btn btn-secondary btn-sm" id="btnAgregarMaterial">+ Agregar material</button>
             </div>
+            <p class="muted" style="margin:-4px 0 12px">Marca "Impresión" y/o "Corte" en cada material si ese trabajo lo requirió — se sumará el precio configurado por hoja impresa y por corte.</p>
             <div id="materialRows" class="material-rows"></div>
             <div class="empty-hint" id="materialRowsEmpty">Aún no agregas materiales. Presiona “Agregar material”.</div>
           </div>
 
           <div class="totals-strip">
             <div class="tot-item">
-              <span class="tot-label">Costo total materiales</span>
+              <span class="tot-label">Costo materiales</span>
               <span class="tot-value" id="totCostoMateriales">S/. 0.00</span>
+            </div>
+            <div class="tot-item">
+              <span class="tot-label">Impresión + corte</span>
+              <span class="tot-value" id="totCostoImpresionCorte">S/. 0.00</span>
+            </div>
+            <div class="tot-item">
+              <span class="tot-label">Mano de obra</span>
+              <span class="tot-value" id="totCostoManoObra">S/. 0.00</span>
             </div>
             <div class="tot-item">
               <span class="tot-label">Precio cobrado</span>
@@ -418,6 +447,27 @@
             <div class="field field-wide">
               <label>Unidades (separadas por coma)</label>
               <input type="text" id="cfgUnidades" placeholder="hojas, m, unid., kg…">
+            </div>
+          </form>
+        </div>
+
+        <div class="card form-card" style="margin-top:16px">
+          <div class="card-head">
+            <h3>Precios de producción</h3>
+            <p class="muted">Se usan como valor sugerido en "Nuevo Trabajo" — siempre puedes ajustarlos por trabajo.</p>
+          </div>
+          <form class="form-grid" id="formConfigProduccion">
+            <div class="field">
+              <label>Precio hora hombre (S/.)</label>
+              <input type="number" step="0.01" min="0" id="cfgPrecioHora" placeholder="8.00">
+            </div>
+            <div class="field">
+              <label>Precio por hoja impresa (S/.)</label>
+              <input type="number" step="0.01" min="0" id="cfgPrecioImpresion" placeholder="0.50">
+            </div>
+            <div class="field">
+              <label>Precio por corte (S/.)</label>
+              <input type="number" step="0.01" min="0" id="cfgPrecioCorte" placeholder="0.30">
             </div>
           </form>
           <div class="form-actions">

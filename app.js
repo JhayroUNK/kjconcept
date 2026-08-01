@@ -12,6 +12,7 @@ const Utils = {
   uid(){ return 'id_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8); },
   todayISO(){ return new Date().toISOString().slice(0,10); },
   monthKey(dateStr){ return (dateStr||'').slice(0,7); }, // YYYY-MM
+  currentMonthKey(){ return Utils.todayISO().slice(0,7); },
   money(n){
     const cfg = Store.getConfig();
     const val = Number(n)||0;
@@ -45,6 +46,20 @@ const Utils = {
   },
   escapeHtml(str){
     return String(str??'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  },
+  // Normaliza texto para comparar nombres de materiales de forma confiable:
+  // quita espacios extra, tildes/acentos y diferencias de mayúsculas/minúsculas.
+  normalizeText(str){
+    return String(str??'')
+      .trim()
+      .toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g,'') // quita tildes (á->a, ñ se mantiene con excepción abajo)
+      .replace(/\s+/g,' '); // colapsa espacios múltiples/tabs/saltos de línea a uno solo
+  },
+  // Busca un material en el inventario que "es el mismo" aunque el texto no sea idéntico
+  findMaterial(inv, nombre){
+    const target = this.normalizeText(nombre);
+    return inv.find(m => this.normalizeText(m.nombre) === target);
   }
 };
 
@@ -80,13 +95,30 @@ const Store = {
         categorias: ['Vinil','Papel Fotográfico','Imantado','Laminado','Empaque','Otros'],
         unidades: ['hojas','m','unid.','kg','rollo'],
         stockMinimoDefault: 10,
-        capitalInicial: 0
+        capitalInicial: 0,
+        precioHoraHombre: 8,
+        precioImpresionHoja: 0.5,
+        precioCorte: 0.3
       });
     }
     if(!localStorage.getItem(KEYS.inventario)) this._write(KEYS.inventario, []);
     if(!localStorage.getItem(KEYS.compras)) this._write(KEYS.compras, []);
     if(!localStorage.getItem(KEYS.ventas)) this._write(KEYS.ventas, []);
     if(!localStorage.getItem(KEYS.gastos)) this._write(KEYS.gastos, []);
+    this.migrateConfig();
+  },
+
+  // Si ya existe una configuración guardada de una versión anterior (sin los
+  // campos nuevos de hora hombre / impresión / corte), les asigna el valor
+  // estándar sin tocar el resto de lo que el usuario ya configuró.
+  migrateConfig(){
+    const cfg = this.getConfig();
+    const defaults = { precioHoraHombre: 8, precioImpresionHoja: 0.5, precioCorte: 0.3 };
+    let changed = false;
+    Object.keys(defaults).forEach(key=>{
+      if(cfg[key] === undefined || cfg[key] === null){ cfg[key] = defaults[key]; changed = true; }
+    });
+    if(changed) this._write(KEYS.config, cfg);
   },
 
   getConfig(){ return this._read(KEYS.config, {}); },
@@ -133,18 +165,24 @@ const Store = {
 /* CALC — all derived business metrics (never store computed values)      */
 /* ---------------------------------------------------------------------- */
 const Calc = {
-  inversionTotal(){ return Store.getCompras().reduce((s,c)=>s+Number(c.precioTotal||0),0); },
+  // Filtra un arreglo por mes (YYYY-MM) usando su campo `fecha`. Sin mesKey, no filtra (histórico completo).
+  _byMonth(arr, mesKey){ return mesKey ? arr.filter(x => Utils.monthKey(x.fecha) === mesKey) : arr; },
+
+  inversionTotal(mesKey){ return this._byMonth(Store.getCompras(), mesKey).reduce((s,c)=>s+Number(c.precioTotal||0),0); },
   valorInventarioActual(){ return Store.getInventario().reduce((s,m)=>s+ (Number(m.cantidad||0) * Number(m.costoPromedio||0)),0); },
-  materialConsumido(){ return Store.getVentas().reduce((s,v)=>s+Number(v.costoTotalMateriales||0),0); },
-  ventasTotales(){ return Store.getVentas().reduce((s,v)=>s+Number(v.precioCobrado||0),0); },
-  gananciaBruta(){ return this.ventasTotales() - this.materialConsumido(); },
-  gastosTotales(){ return Store.getGastos().reduce((s,g)=>s+Number(g.monto||0),0); },
-  utilidadNeta(){ return this.gananciaBruta() - this.gastosTotales(); },
+  materialConsumido(mesKey){ return this._byMonth(Store.getVentas(), mesKey).reduce((s,v)=>s+Number(v.costoTotalMateriales||0),0); },
+  // Costo de mano de obra + impresión + corte de los trabajos (todo el histórico o del mes indicado)
+  costoProduccionExtra(mesKey){ return this._byMonth(Store.getVentas(), mesKey).reduce((s,v)=>s+Number(v.costoManoObra||0)+Number(v.costoImpresion||0)+Number(v.costoCorte||0),0); },
+  ventasTotales(mesKey){ return this._byMonth(Store.getVentas(), mesKey).reduce((s,v)=>s+Number(v.precioCobrado||0),0); },
+  // Suma la ganancia ya calculada de cada venta (precio - materiales - impresión - corte - mano de obra)
+  gananciaBruta(mesKey){ return this._byMonth(Store.getVentas(), mesKey).reduce((s,v)=>s+Number(v.ganancia||0),0); },
+  gastosTotales(mesKey){ return this._byMonth(Store.getGastos(), mesKey).reduce((s,g)=>s+Number(g.monto||0),0); },
+  utilidadNeta(mesKey){ return this.gananciaBruta(mesKey) - this.gastosTotales(mesKey); },
   capitalDisponible(){
     const cfg = Store.getConfig();
     return Number(cfg.capitalInicial||0) + this.ventasTotales() - this.inversionTotal() - this.gastosTotales();
   },
-  trabajosRealizados(){ return Store.getVentas().length; },
+  trabajosRealizados(mesKey){ return this._byMonth(Store.getVentas(), mesKey).length; },
   materialesEnInventario(){ return Store.getInventario().length; },
   materialesStockBajo(){ return Store.getInventario().filter(m => Number(m.cantidad) <= Number(m.stockMinimo||0)); },
   recuperacionPct(){
@@ -152,8 +190,8 @@ const Calc = {
     if(inv <= 0) return 100;
     return Math.min(100, (this.ventasTotales() / inv) * 100);
   },
-  estadoFinanciero(){
-    const u = this.utilidadNeta();
+  estadoFinanciero(mesKey){
+    const u = this.utilidadNeta(mesKey);
     if(u > 0) return 'ganancias';
     if(u === 0) return 'equilibrio';
     return 'rojo';
@@ -372,6 +410,32 @@ const Charts = {
 /* VIEWS — DASHBOARD                                                       */
 /* ---------------------------------------------------------------------- */
 const DashboardView = {
+  mode: 'mes', // 'mes' | 'general'
+  mesKey: Utils.currentMonthKey(),
+  init(){
+    document.querySelectorAll('#dashViewToggle .seg-btn').forEach(btn=>{
+      btn.onclick = ()=>{
+        this.mode = btn.dataset.mode;
+        document.querySelectorAll('#dashViewToggle .seg-btn').forEach(b=> b.classList.toggle('active', b===btn));
+        document.getElementById('dashMonthNav').style.display = this.mode==='mes' ? 'flex':'none';
+        this.render();
+      };
+    });
+    document.getElementById('dashMonthPrev').onclick = ()=> this._shiftMonth(-1);
+    document.getElementById('dashMonthNext').onclick = ()=> this._shiftMonth(1);
+    this._updateMonthLabel();
+  },
+  _shiftMonth(delta){
+    const [y,m] = this.mesKey.split('-').map(Number);
+    const d = new Date(y, (m-1)+delta, 1);
+    this.mesKey = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+    this._updateMonthLabel();
+    this.render();
+  },
+  _updateMonthLabel(){
+    const el = document.getElementById('dashMonthLabel');
+    if(el) el.textContent = Utils.monthLabel(this.mesKey);
+  },
   render(){
     const skel = document.getElementById('dashboardSkeleton');
     const content = document.getElementById('dashboardContent');
@@ -379,39 +443,46 @@ const DashboardView = {
     skel.style.display = 'grid';
     content.style.display = 'none';
 
+    this._updateMonthLabel();
+    document.getElementById('dashMonthNav').style.display = this.mode==='mes' ? 'flex':'none';
+
     setTimeout(()=>{
-      this._renderKpis();
+      const periodo = this.mode==='mes' ? this.mesKey : null;
+      this._renderKpis(periodo);
       this._renderRecovery();
-      this._renderEstado();
+      this._renderEstado(periodo);
       Charts.renderAll();
       skel.style.display = 'none';
       content.style.display = 'block';
     }, 260);
   },
-  _renderKpis(){
+  _renderKpis(periodo){
     const grid = document.getElementById('kpiGrid');
-    const inv = Calc.inversionTotal();
+    const sufijo = periodo ? ' (este mes)' : ' (histórico)';
+    const inv = Calc.inversionTotal(periodo);
     const valInv = Calc.valorInventarioActual();
-    const matCons = Calc.materialConsumido();
-    const ventas = Calc.ventasTotales();
-    const gBruta = Calc.gananciaBruta();
-    const gastos = Calc.gastosTotales();
-    const uNeta = Calc.utilidadNeta();
+    const matCons = Calc.materialConsumido(periodo);
+    const prodExtra = Calc.costoProduccionExtra(periodo);
+    const ventas = Calc.ventasTotales(periodo);
+    const gBruta = Calc.gananciaBruta(periodo);
+    const gastos = Calc.gastosTotales(periodo);
+    const uNeta = Calc.utilidadNeta(periodo);
     const capDisp = Calc.capitalDisponible();
-    const trabajos = Calc.trabajosRealizados();
+    const trabajos = Calc.trabajosRealizados(periodo);
     const numMat = Calc.materialesEnInventario();
     const stockBajo = Calc.materialesStockBajo().length;
 
     const cards = [
-      {label:'Inversión total', value: Utils.money(inv), tone:''},
+      {label:'Compras'+sufijo, value: Utils.money(inv), tone:''},
       {label:'Valor actual del inventario', value: Utils.money(valInv), tone:'accent'},
-      {label:'Material consumido', value: Utils.money(matCons), tone:''},
-      {label:'Ventas totales', value: Utils.money(ventas), tone:'success'},
-      {label:'Ganancia bruta', value: Utils.money(gBruta), tone: gBruta>=0?'success':'danger'},
-      {label:'Gastos totales', value: Utils.money(gastos), tone:'warning'},
-      {label:'Utilidad neta', value: Utils.money(uNeta), tone: uNeta>=0?'success':'danger', big:true},
-      {label:'Capital disponible', value: Utils.money(capDisp), tone: capDisp>=0?'accent':'danger', big:true},
-      {label:'Trabajos realizados', value: trabajos, tone:''},
+      {label:'Material consumido'+sufijo, value: Utils.money(matCons), tone:''},
+      {label:'Mano de obra + impresión/corte'+sufijo, value: Utils.money(prodExtra), tone:''},
+      {label:'Ventas'+sufijo, value: Utils.money(ventas), tone:'success'},
+      {label:'Ganancia bruta'+sufijo, value: Utils.money(gBruta), tone: gBruta>=0?'success':'danger'},
+      {label:'Gastos'+sufijo, value: Utils.money(gastos), tone:'warning'},
+      {label:'Utilidad neta'+sufijo, value: Utils.money(uNeta), tone: uNeta>=0?'success':'danger', big:true},
+      {label:'Capital disponible (actual)', value: Utils.money(capDisp), tone: capDisp>=0?'accent':'danger', big:true},
+      {label:'Trabajos'+sufijo, value: trabajos, tone:''},
       {label:'Materiales en inventario', value: numMat, tone:''},
       {label:'Materiales con stock bajo', value: stockBajo, tone: stockBajo>0?'danger':'success'}
     ];
@@ -442,13 +513,14 @@ const DashboardView = {
       `;
     }
   },
-  _renderEstado(){
-    const estado = Calc.estadoFinanciero();
-    const u = Calc.utilidadNeta();
+  _renderEstado(periodo){
+    const estado = Calc.estadoFinanciero(periodo);
+    const u = Calc.utilidadNeta(periodo);
+    const sufijo = periodo ? ` en ${Utils.monthLabel(periodo)}` : ' (histórico)';
     const map = {
-      ganancias: {cls:'ok', tag:'🟢 GANANCIAS', text:`El negocio genera una utilidad neta positiva de ${Utils.money(u)}. Ingresos superan costos y gastos.`},
-      equilibrio: {cls:'mid', tag:'🟡 EQUILIBRIO', text:'Los ingresos igualan exactamente a los costos y gastos. Ni ganancia ni pérdida.'},
-      rojo: {cls:'bad', tag:'🔴 EN ROJO', text:`El negocio está en pérdida de ${Utils.money(Math.abs(u))}. Los costos y gastos superan los ingresos.`}
+      ganancias: {cls:'ok', tag:'🟢 GANANCIAS', text:`El negocio genera una utilidad neta positiva de ${Utils.money(u)}${sufijo}. Ingresos superan costos y gastos.`},
+      equilibrio: {cls:'mid', tag:'🟡 EQUILIBRIO', text:`Los ingresos igualan exactamente a los costos y gastos${sufijo}. Ni ganancia ni pérdida.`},
+      rojo: {cls:'bad', tag:'🔴 EN ROJO', text:`El negocio está en pérdida de ${Utils.money(Math.abs(u))}${sufijo}. Los costos y gastos superan los ingresos.`}
     };
     const info = map[estado];
     document.getElementById('estadoFinancieroBody').innerHTML = `
@@ -470,13 +542,17 @@ const NuevoTrabajoView = {
     document.getElementById('trabajoFecha').value = Utils.todayISO();
     document.getElementById('btnAgregarMaterial').onclick = ()=> this.addRow();
     document.getElementById('btnRegistrarVenta').onclick = ()=> this.registrar();
+    document.getElementById('trabajoPrecioHora').value = Store.getConfig().precioHoraHombre ?? 8;
+    ['trabajoPrecio','trabajoHoras','trabajoPrecioHora'].forEach(id=>{
+      document.getElementById(id).oninput = ()=> this.updateTotals();
+    });
     this.rows = [];
     this.renderRows();
   },
   addRow(){
     const inv = Store.getInventario();
     if(inv.length === 0){ Toast.show('warning','Primero registra materiales en Inventario.'); return; }
-    this.rows.push({rowId: Utils.uid(), materialId:'', cantidad:0});
+    this.rows.push({rowId: Utils.uid(), materialId:'', cantidad:0, impresion:false, corte:false});
     this.renderRows();
   },
   removeRow(rowId){
@@ -486,37 +562,48 @@ const NuevoTrabajoView = {
   renderRows(){
     const wrap = document.getElementById('materialRows');
     const inv = Store.getInventario();
+    const cfg = Store.getConfig();
     document.getElementById('materialRowsEmpty').style.display = this.rows.length? 'none':'block';
     wrap.innerHTML = this.rows.map(r=>{
       const mat = inv.find(m=>m.id===r.materialId);
       const costoUnit = mat ? Number(mat.costoPromedio) : 0;
-      const costoTotal = costoUnit * Number(r.cantidad||0);
+      const cant = Number(r.cantidad||0);
+      const costoTotal = costoUnit * cant;
+      const costoImpresion = r.impresion ? cant * Number(cfg.precioImpresionHoja||0) : 0;
+      const costoCorte = r.corte ? cant * Number(cfg.precioCorte||0) : 0;
       return `
       <div class="material-row" data-row="${r.rowId}">
-        <div class="field">
-          <label>Material</label>
-          <select class="mr-material" data-row="${r.rowId}">
-            <option value="">Selecciona…</option>
-            ${inv.map(m=>`<option value="${m.id}" ${m.id===r.materialId?'selected':''}>${Utils.escapeHtml(m.nombre)} (${Utils.num(m.cantidad,1)} ${Utils.escapeHtml(m.unidad)} disp.)</option>`).join('')}
-          </select>
+        <div class="material-row-main">
+          <div class="field">
+            <label>Material</label>
+            <select class="mr-material" data-row="${r.rowId}">
+              <option value="">Selecciona…</option>
+              ${inv.map(m=>`<option value="${m.id}" ${m.id===r.materialId?'selected':''}>${Utils.escapeHtml(m.nombre)} (${Utils.num(m.cantidad,1)} ${Utils.escapeHtml(m.unidad)} disp.)</option>`).join('')}
+            </select>
+          </div>
+          <div class="field">
+            <label>Cantidad usada</label>
+            <input type="number" step="0.01" min="0" class="mr-cantidad" data-row="${r.rowId}" value="${r.cantidad||''}">
+          </div>
+          <div class="field">
+            <label>Unidad</label>
+            <input type="text" value="${mat?Utils.escapeHtml(mat.unidad):'—'}" disabled>
+          </div>
+          <div class="field">
+            <label>Costo unitario</label>
+            <input type="text" value="${Utils.money(costoUnit)}" disabled>
+          </div>
+          <div class="field">
+            <label>Costo usado</label>
+            <input type="text" class="mr-costo-usado" value="${Utils.money(costoTotal)}" disabled>
+          </div>
+          <button class="material-row-remove" data-row="${r.rowId}" title="Eliminar">✕</button>
         </div>
-        <div class="field">
-          <label>Cantidad usada</label>
-          <input type="number" step="0.01" min="0" class="mr-cantidad" data-row="${r.rowId}" value="${r.cantidad||''}">
+        <div class="material-row-extra">
+          <label class="chk-label"><input type="checkbox" class="mr-impresion" data-row="${r.rowId}" ${r.impresion?'checked':''}> Impresión (${Utils.money(cfg.precioImpresionHoja||0)} / hoja)</label>
+          <label class="chk-label"><input type="checkbox" class="mr-corte" data-row="${r.rowId}" ${r.corte?'checked':''}> Corte (${Utils.money(cfg.precioCorte||0)} / unid.)</label>
+          <span class="extra-cost mr-extra-cost">+ ${Utils.money(costoImpresion+costoCorte)}</span>
         </div>
-        <div class="field">
-          <label>Unidad</label>
-          <input type="text" value="${mat?Utils.escapeHtml(mat.unidad):'—'}" disabled>
-        </div>
-        <div class="field">
-          <label>Costo unitario</label>
-          <input type="text" value="${Utils.money(costoUnit)}" disabled>
-        </div>
-        <div class="field">
-          <label>Costo usado</label>
-          <input type="text" value="${Utils.money(costoTotal)}" disabled>
-        </div>
-        <button class="material-row-remove" data-row="${r.rowId}" title="Eliminar">✕</button>
       </div>`;
     }).join('');
 
@@ -535,36 +622,81 @@ const NuevoTrabajoView = {
         this.updateTotalsOnly();
       };
     });
+    wrap.querySelectorAll('.mr-impresion').forEach(chk=>{
+      chk.onchange = (e)=>{
+        const r = this.rows.find(x=>x.rowId===e.target.dataset.row);
+        r.impresion = e.target.checked;
+        this.updateTotalsOnly();
+      };
+    });
+    wrap.querySelectorAll('.mr-corte').forEach(chk=>{
+      chk.onchange = (e)=>{
+        const r = this.rows.find(x=>x.rowId===e.target.dataset.row);
+        r.corte = e.target.checked;
+        this.updateTotalsOnly();
+      };
+    });
     wrap.querySelectorAll('.material-row-remove').forEach(btn=>{
       btn.onclick = (e)=> this.removeRow(e.target.dataset.row);
     });
     this.updateTotals();
   },
   updateTotalsOnly(){
-    // update just the costo usado fields without re-render (keeps focus)
+    // update just the costo usado / extra-cost fields without re-render (keeps focus)
     const inv = Store.getInventario();
+    const cfg = Store.getConfig();
     document.querySelectorAll('#materialRows .material-row').forEach(rowEl=>{
       const rowId = rowEl.dataset.row;
       const r = this.rows.find(x=>x.rowId===rowId);
       const mat = inv.find(m=>m.id===r.materialId);
       const costoUnit = mat? Number(mat.costoPromedio):0;
-      const costoTotal = costoUnit * Number(r.cantidad||0);
-      const fields = rowEl.querySelectorAll('input[disabled]');
-      if(fields[1]) fields[1].value = Utils.money(costoTotal);
+      const cant = Number(r.cantidad||0);
+      const costoTotal = costoUnit * cant;
+      const costoImpresion = r.impresion ? cant * Number(cfg.precioImpresionHoja||0) : 0;
+      const costoCorte = r.corte ? cant * Number(cfg.precioCorte||0) : 0;
+      const costoUsadoEl = rowEl.querySelector('.mr-costo-usado');
+      if(costoUsadoEl) costoUsadoEl.value = Utils.money(costoTotal);
+      const extraCostEl = rowEl.querySelector('.mr-extra-cost');
+      if(extraCostEl) extraCostEl.textContent = `+ ${Utils.money(costoImpresion+costoCorte)}`;
     });
     this.updateTotals();
   },
-  updateTotals(){
+  // Costo de mano de obra del trabajo (horas x precio por hora)
+  _costoManoObra(){
+    const horas = Number(document.getElementById('trabajoHoras').value)||0;
+    const precioHora = Number(document.getElementById('trabajoPrecioHora').value)||0;
+    return horas * precioHora;
+  },
+  // Costo de impresión + corte sumando todas las filas de materiales marcadas
+  _costoImpresionCorte(){
     const inv = Store.getInventario();
-    let costoTotal = 0;
+    const cfg = Store.getConfig();
+    let total = 0;
     this.rows.forEach(r=>{
       const mat = inv.find(m=>m.id===r.materialId);
-      if(mat) costoTotal += Number(mat.costoPromedio) * Number(r.cantidad||0);
+      if(!mat) return;
+      const cant = Number(r.cantidad||0);
+      if(r.impresion) total += cant * Number(cfg.precioImpresionHoja||0);
+      if(r.corte) total += cant * Number(cfg.precioCorte||0);
     });
+    return total;
+  },
+  updateTotals(){
+    const inv = Store.getInventario();
+    let costoMateriales = 0;
+    this.rows.forEach(r=>{
+      const mat = inv.find(m=>m.id===r.materialId);
+      if(mat) costoMateriales += Number(mat.costoPromedio) * Number(r.cantidad||0);
+    });
+    const costoImpresionCorte = this._costoImpresionCorte();
+    const costoManoObra = this._costoManoObra();
+    const costoProduccion = costoMateriales + costoImpresionCorte + costoManoObra;
     const precio = Number(document.getElementById('trabajoPrecio').value)||0;
-    const ganancia = precio - costoTotal;
-    const margen = Calc.margen(precio, costoTotal);
-    document.getElementById('totCostoMateriales').textContent = Utils.money(costoTotal);
+    const ganancia = precio - costoProduccion;
+    const margen = Calc.margen(precio, costoProduccion);
+    document.getElementById('totCostoMateriales').textContent = Utils.money(costoMateriales);
+    document.getElementById('totCostoImpresionCorte').textContent = Utils.money(costoImpresionCorte);
+    document.getElementById('totCostoManoObra').textContent = Utils.money(costoManoObra);
     document.getElementById('totPrecioCobrado').textContent = Utils.money(precio);
     document.getElementById('totGanancia').textContent = Utils.money(ganancia);
     document.getElementById('totMargen').textContent = Utils.pct(margen);
@@ -575,11 +707,14 @@ const NuevoTrabajoView = {
     const fecha = document.getElementById('trabajoFecha').value || Utils.todayISO();
     const precio = Number(document.getElementById('trabajoPrecio').value);
     const obs = document.getElementById('trabajoObs').value.trim();
+    const horasHombre = Number(document.getElementById('trabajoHoras').value)||0;
+    const precioHoraHombre = Number(document.getElementById('trabajoPrecioHora').value)||0;
 
     if(!nombre){ Toast.show('warning','Escribe el nombre del trabajo.'); return; }
     if(!precio || precio<=0){ Toast.show('warning','Ingresa un precio cobrado válido.'); return; }
     if(this.rows.some(r=>!r.materialId)){ Toast.show('warning','Selecciona un material en cada fila, o elimínala.'); return; }
 
+    const cfg = Store.getConfig();
     const inv = Store.getInventario();
     // validate stock
     const usados = [];
@@ -591,12 +726,22 @@ const NuevoTrabajoView = {
         Toast.show('error', `Stock insuficiente de "${mat.nombre}". Disponible: ${Utils.num(mat.cantidad,1)} ${mat.unidad}.`);
         return;
       }
-      usados.push({materialId:mat.id, nombre:mat.nombre, cantidad:cant, unidad:mat.unidad, costoUnitario:Number(mat.costoPromedio), costoTotal: Number(mat.costoPromedio)*cant});
+      const costoImpresion = r.impresion ? cant * Number(cfg.precioImpresionHoja||0) : 0;
+      const costoCorte = r.corte ? cant * Number(cfg.precioCorte||0) : 0;
+      usados.push({
+        materialId:mat.id, nombre:mat.nombre, cantidad:cant, unidad:mat.unidad,
+        costoUnitario:Number(mat.costoPromedio), costoTotal: Number(mat.costoPromedio)*cant,
+        impresion: !!r.impresion, corte: !!r.corte, costoImpresion, costoCorte
+      });
     }
 
     const costoTotalMateriales = usados.reduce((s,u)=>s+u.costoTotal,0);
-    const ganancia = precio - costoTotalMateriales;
-    const margen = Calc.margen(precio, costoTotalMateriales);
+    const costoImpresion = usados.reduce((s,u)=>s+u.costoImpresion,0);
+    const costoCorte = usados.reduce((s,u)=>s+u.costoCorte,0);
+    const costoManoObra = horasHombre * precioHoraHombre;
+    const costoProduccionTotal = costoTotalMateriales + costoImpresion + costoCorte + costoManoObra;
+    const ganancia = precio - costoProduccionTotal;
+    const margen = Calc.margen(precio, costoProduccionTotal);
 
     // discount inventory
     usados.forEach(u=>{
@@ -608,7 +753,10 @@ const NuevoTrabajoView = {
     const ventas = Store.getVentas();
     ventas.push({
       id: Utils.uid(), fecha, nombreTrabajo: nombre, cliente, precioCobrado: precio,
-      observaciones: obs, materiales: usados, costoTotalMateriales, ganancia, margen
+      observaciones: obs, materiales: usados,
+      costoTotalMateriales, costoImpresion, costoCorte,
+      horasHombre, precioHoraHombre, costoManoObra,
+      costoProduccionTotal, ganancia, margen
     });
     Store.setVentas(ventas);
 
@@ -616,6 +764,7 @@ const NuevoTrabajoView = {
     // reset form
     document.getElementById('formTrabajo').reset();
     document.getElementById('trabajoFecha').value = Utils.todayISO();
+    document.getElementById('trabajoPrecioHora').value = cfg.precioHoraHombre ?? 8;
     this.rows = [];
     this.renderRows();
     App.refreshBadges();
@@ -712,9 +861,14 @@ const InventarioView = {
           };
           const list = Store.getInventario();
           if(mat){
-            Object.assign(mat, data);
-            Store.setInventario(list);
-            Toast.show('success','Material actualizado.');
+            const target = list.find(m=>m.id===mat.id);
+            if(target){
+              Object.assign(target, data);
+              Store.setInventario(list);
+              Toast.show('success','Material actualizado.');
+            } else {
+              Toast.show('error','No se encontró el material a actualizar.');
+            }
           } else {
             list.push({id: Utils.uid(), ultimaCompra:null, ...data});
             Store.setInventario(list);
@@ -745,7 +899,7 @@ const ComprasView = {
   init(){
     document.getElementById('compraFecha').value = Utils.todayISO();
     document.getElementById('btnRegistrarCompra').onclick = ()=> this.registrar();
-    ['compraCantidad','compraPrecioTotal'].forEach(id=>{
+    ['compraCantidad','compraPrecioTotal','compraMaterial'].forEach(id=>{
       document.getElementById(id).oninput = ()=> this.updatePreview();
     });
     this.populateDatalists();
@@ -760,12 +914,31 @@ const ComprasView = {
   updatePreview(){
     const cant = Number(document.getElementById('compraCantidad').value)||0;
     const total = Number(document.getElementById('compraPrecioTotal').value)||0;
+    const nombreMat = document.getElementById('compraMaterial').value.trim();
     const box = document.getElementById('compraPreview');
+
+    box.classList.remove('is-existing','is-new');
+    let html = '';
+
     if(cant>0 && total>0){
       const unit = total/cant;
-      box.style.display='block';
-      box.textContent = `Precio unitario calculado: ${Utils.money(unit)}`;
-    } else box.style.display='none';
+      html += `Precio unitario calculado: <strong>${Utils.money(unit)}</strong>`;
+    }
+
+    if(nombreMat){
+      const inv = Store.getInventario();
+      const mat = Utils.findMaterial(inv, nombreMat);
+      if(mat){
+        box.classList.add('is-existing');
+        html += `<br>✓ Coincide con <strong>"${Utils.escapeHtml(mat.nombre)}"</strong> — se sumará al stock actual (${Utils.num(mat.cantidad,1)} ${Utils.escapeHtml(mat.unidad)}).`;
+      } else {
+        box.classList.add('is-new');
+        html += `<br>🆕 No existe aún: se creará <strong>"${Utils.escapeHtml(nombreMat)}"</strong> como material nuevo.`;
+      }
+    }
+
+    if(html){ box.style.display='block'; box.innerHTML = html; }
+    else box.style.display='none';
   },
   registrar(){
     const fecha = document.getElementById('compraFecha').value || Utils.todayISO();
@@ -783,7 +956,7 @@ const ComprasView = {
 
     const precioUnitario = precioTotal / cantidad;
     const inv = Store.getInventario();
-    let mat = inv.find(m=>m.nombre.toLowerCase()===nombreMat.toLowerCase());
+    let mat = Utils.findMaterial(inv, nombreMat);
 
     if(mat){
       const cantidadAnterior = Number(mat.cantidad);
@@ -876,16 +1049,26 @@ const HistorialView = {
   showDetail(id){
     const v = Store.getVentas().find(x=>x.id===id);
     if(!v) return;
-    const matHtml = (v.materiales||[]).map(m=>`
-      <div class="detail-mat-row"><span>${Utils.escapeHtml(m.nombre)} — ${Utils.num(m.cantidad,1)} ${Utils.escapeHtml(m.unidad)}</span><span>${Utils.money(m.costoTotal)}</span></div>
-    `).join('');
+    const matHtml = (v.materiales||[]).map(m=>{
+      const tags = [m.impresion?'Impresión':'', m.corte?'Corte':''].filter(Boolean).join(' + ');
+      return `
+      <div class="detail-mat-row">
+        <span>${Utils.escapeHtml(m.nombre)} — ${Utils.num(m.cantidad,1)} ${Utils.escapeHtml(m.unidad)}${tags?` <span class="tag">${tags}</span>`:''}</span>
+        <span>${Utils.money(m.costoTotal + (m.costoImpresion||0) + (m.costoCorte||0))}</span>
+      </div>`;
+    }).join('');
+    const manoObraHtml = Number(v.horasHombre)>0 ? `
+      <div class="detail-mat-row"><span>Mano de obra — ${Utils.num(v.horasHombre,2)} h × ${Utils.money(v.precioHoraHombre)}</span><span>${Utils.money(v.costoManoObra)}</span></div>
+    ` : '';
     Modal.open({
       title: v.nombreTrabajo,
       bodyHtml: `
         <p class="muted">Cliente: ${Utils.escapeHtml(v.cliente||'—')} · ${Utils.formatDate(v.fecha)}</p>
-        <div class="detail-mat-list">${matHtml || '<p class="muted">Sin materiales registrados.</p>'}</div>
+        <div class="detail-mat-list">${matHtml || '<p class="muted">Sin materiales registrados.</p>'}${manoObraHtml}</div>
         <div class="totals-strip" style="margin-top:16px">
           <div class="tot-item"><span class="tot-label">Costo materiales</span><span class="tot-value">${Utils.money(v.costoTotalMateriales)}</span></div>
+          <div class="tot-item"><span class="tot-label">Impresión + corte</span><span class="tot-value">${Utils.money((v.costoImpresion||0)+(v.costoCorte||0))}</span></div>
+          <div class="tot-item"><span class="tot-label">Mano de obra</span><span class="tot-value">${Utils.money(v.costoManoObra||0)}</span></div>
           <div class="tot-item"><span class="tot-label">Precio</span><span class="tot-value">${Utils.money(v.precioCobrado)}</span></div>
           <div class="tot-item"><span class="tot-label">Ganancia</span><span class="tot-value accent-text">${Utils.money(v.ganancia)}</span></div>
           <div class="tot-item"><span class="tot-label">Margen</span><span class="tot-value">${Utils.pct(v.margen)}</span></div>
@@ -952,6 +1135,7 @@ const FinanzasView = {
       {label:'Dinero recuperado', value: Utils.money(Calc.ventasTotales())},
       {label:'Dinero aún invertido (inventario)', value: Utils.money(Calc.valorInventarioActual())},
       {label:'Material consumido', value: Utils.money(Calc.materialConsumido())},
+      {label:'Mano de obra + impresión/corte', value: Utils.money(Calc.costoProduccionExtra())},
       {label:'Gastos totales', value: Utils.money(Calc.gastosTotales())},
       {label:'Utilidad neta', value: Utils.money(Calc.utilidadNeta()), tone: Calc.utilidadNeta()>=0?'success':'danger'},
       {label:'Capital disponible para reinvertir', value: Utils.money(Calc.capitalDisponible()), tone:'accent', big:true}
@@ -1044,6 +1228,9 @@ const ConfigView = {
     document.getElementById('cfgTema').value = cfg.tema||'dark';
     document.getElementById('cfgCategorias').value = (cfg.categorias||[]).join(', ');
     document.getElementById('cfgUnidades').value = (cfg.unidades||[]).join(', ');
+    document.getElementById('cfgPrecioHora').value = cfg.precioHoraHombre ?? 8;
+    document.getElementById('cfgPrecioImpresion').value = cfg.precioImpresionHoja ?? 0.5;
+    document.getElementById('cfgPrecioCorte').value = cfg.precioCorte ?? 0.3;
   },
   save(){
     const cfg = Store.getConfig();
@@ -1053,6 +1240,9 @@ const ConfigView = {
     cfg.tema = document.getElementById('cfgTema').value;
     cfg.categorias = document.getElementById('cfgCategorias').value.split(',').map(s=>s.trim()).filter(Boolean);
     cfg.unidades = document.getElementById('cfgUnidades').value.split(',').map(s=>s.trim()).filter(Boolean);
+    cfg.precioHoraHombre = Number(document.getElementById('cfgPrecioHora').value)||0;
+    cfg.precioImpresionHoja = Number(document.getElementById('cfgPrecioImpresion').value)||0;
+    cfg.precioCorte = Number(document.getElementById('cfgPrecioCorte').value)||0;
     Store.setConfig(cfg);
     App.applyTheme(cfg.tema);
     App.applyBrand(cfg.nombreNegocio);
@@ -1082,7 +1272,9 @@ const Exporter = {
   ventas(){
     const data = Store.getVentas().map(v=>({
       Fecha:v.fecha, Cliente:v.cliente, Trabajo:v.nombreTrabajo, 'Precio Cobrado':v.precioCobrado,
-      'Costo Materiales':v.costoTotalMateriales, Ganancia:v.ganancia, 'Margen %':v.margen
+      'Costo Materiales':v.costoTotalMateriales, 'Impresión':v.costoImpresion||0, 'Corte':v.costoCorte||0,
+      'Horas Hombre':v.horasHombre||0, 'Precio Hora':v.precioHoraHombre||0, 'Mano de Obra':v.costoManoObra||0,
+      Ganancia:v.ganancia, 'Margen %':v.margen
     }));
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
@@ -1164,6 +1356,7 @@ const App = {
     this.bindThemeToggle();
     this.bindMobileMenu();
 
+    DashboardView.init();
     NuevoTrabajoView.init();
     InventarioView.init();
     ComprasView.init();
