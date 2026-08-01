@@ -1,9 +1,67 @@
 /* ==========================================================================
    KJ CONCEPT — app.js
-   Vanilla JS ES6+. No frameworks. Everything persists in LocalStorage.
-   Modules: Utils, Store, Calc, Toast, Modal, Charts, Views, Nav, Export, App
+   Vanilla JS ES6+. No frameworks. Datos guardados en Supabase (nube),
+   con una caché en memoria para que el resto de la app siga siendo síncrona.
+   Modules: Supa, Auth, Utils, Store, Calc, Toast, Modal, Charts, Views, Nav, Export, App
    ========================================================================== */
 'use strict';
+
+/* ---------------------------------------------------------------------- */
+/* SUPABASE — configuración del proyecto                                  */
+/* Reemplaza estos dos valores con los de tu proyecto:                    */
+/* Supabase → Project Settings → Data API → Project URL / anon public key */
+/* ---------------------------------------------------------------------- */
+const SUPABASE_URL = 'https://TU-PROYECTO.supabase.co';
+const SUPABASE_ANON_KEY = 'TU-ANON-KEY-PUBLICA';
+
+const supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+/* ---------------------------------------------------------------------- */
+/* AUTH — inicio de sesión compartido (varias personas, mismos datos)     */
+/* ---------------------------------------------------------------------- */
+const Auth = {
+  session: null,
+
+  async init(){
+    const { data } = await supa.auth.getSession();
+    this.session = data.session;
+    supa.auth.onAuthStateChange((_event, session)=>{
+      this.session = session;
+      if(!session) this.showLogin();
+    });
+    if(!this.session) await this.waitForLogin();
+  },
+
+  waitForLogin(){
+    return new Promise(resolve=>{
+      this.showLogin();
+      const form = document.getElementById('loginForm');
+      const errEl = document.getElementById('loginError');
+      form.onsubmit = async (e)=>{
+        e.preventDefault();
+        errEl.textContent = '';
+        const email = document.getElementById('loginEmail').value.trim();
+        const password = document.getElementById('loginPassword').value;
+        const btn = document.getElementById('loginSubmit');
+        btn.disabled = true; btn.textContent = 'Ingresando…';
+        const { data, error } = await supa.auth.signInWithPassword({ email, password });
+        btn.disabled = false; btn.textContent = 'Ingresar';
+        if(error){ errEl.textContent = 'Correo o contraseña incorrectos.'; return; }
+        this.session = data.session;
+        this.hideLogin();
+        resolve();
+      };
+    });
+  },
+
+  showLogin(){ document.getElementById('loginOverlay').style.display = 'flex'; },
+  hideLogin(){ document.getElementById('loginOverlay').style.display = 'none'; },
+
+  async logout(){
+    await supa.auth.signOut();
+    location.reload();
+  }
+};
 
 /* ---------------------------------------------------------------------- */
 /* UTILS                                                                   */
@@ -76,19 +134,52 @@ const KEYS = {
 };
 
 const Store = {
+  _cache: {},      // espejo en memoria de lo que hay en Supabase (para leer síncrono)
+  _channel: null,  // canal de Realtime
+
+  // Carga inicial: trae todas las filas desde Supabase antes de que la app arranque.
+  async init(){
+    const { data, error } = await supa.from('app_data').select('key,value');
+    if(error){
+      console.error('Store init error', error);
+      Toast.show('error','No se pudo conectar con la base de datos.');
+    }
+    this._cache = {};
+    (data||[]).forEach(row => { this._cache[row.key] = row.value; });
+    this.ensureDefaults();
+    this._subscribeRealtime();
+  },
+
+  // Escucha cambios hechos desde OTRO dispositivo/usuario y refresca la vista actual.
+  _subscribeRealtime(){
+    if(this._channel) return;
+    this._channel = supa.channel('app_data_sync')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'app_data' }, (payload)=>{
+        const row = payload.new && Object.keys(payload.new).length ? payload.new : payload.old;
+        if(!row) return;
+        if(payload.eventType === 'DELETE') delete this._cache[row.key];
+        else this._cache[row.key] = row.value;
+        if(window.App){ App.renderCurrentView(); App.refreshBadges(); }
+      })
+      .subscribe();
+  },
+
   _read(key, fallback){
-    try{
-      const raw = localStorage.getItem(key);
-      return raw ? JSON.parse(raw) : fallback;
-    }catch(e){ console.error('Store read error', key, e); return fallback; }
+    const v = this._cache[key];
+    return v !== undefined ? v : fallback;
   },
   _write(key, value){
-    try{ localStorage.setItem(key, JSON.stringify(value)); return true; }
-    catch(e){ console.error('Store write error', key, e); Toast.show('error','No se pudo guardar. Almacenamiento lleno o bloqueado.'); return false; }
+    this._cache[key] = value; // se refleja al toque en la UI de este dispositivo
+    supa.from('app_data')
+      .upsert({ key, value, updated_at: new Date().toISOString() })
+      .then(({ error })=>{
+        if(error){ console.error('Store write error', key, error); Toast.show('error','No se pudo guardar en la nube. Revisa tu conexión.'); }
+      });
+    return true;
   },
 
   ensureDefaults(){
-    if(!localStorage.getItem(KEYS.config)){
+    if(this._cache[KEYS.config] === undefined){
       this._write(KEYS.config, {
         nombreNegocio: 'KJ Concept',
         moneda: 'S/.',
@@ -102,11 +193,11 @@ const Store = {
         precioCorte: 0.3
       });
     }
-    if(!localStorage.getItem(KEYS.inventario)) this._write(KEYS.inventario, []);
-    if(!localStorage.getItem(KEYS.compras)) this._write(KEYS.compras, []);
-    if(!localStorage.getItem(KEYS.ventas)) this._write(KEYS.ventas, []);
-    if(!localStorage.getItem(KEYS.gastos)) this._write(KEYS.gastos, []);
-    if(!localStorage.getItem(KEYS.mermas)) this._write(KEYS.mermas, []);
+    if(this._cache[KEYS.inventario] === undefined) this._write(KEYS.inventario, []);
+    if(this._cache[KEYS.compras] === undefined) this._write(KEYS.compras, []);
+    if(this._cache[KEYS.ventas] === undefined) this._write(KEYS.ventas, []);
+    if(this._cache[KEYS.gastos] === undefined) this._write(KEYS.gastos, []);
+    if(this._cache[KEYS.mermas] === undefined) this._write(KEYS.mermas, []);
     this.migrateConfig();
   },
 
@@ -141,8 +232,11 @@ const Store = {
   getMermas(){ return this._read(KEYS.mermas, []); },
   setMermas(arr){ return this._write(KEYS.mermas, arr); },
 
-  resetAll(){
-    Object.values(KEYS).forEach(k => localStorage.removeItem(k));
+  async resetAll(){
+    const keys = Object.values(KEYS);
+    this._cache = {};
+    const { error } = await supa.from('app_data').delete().in('key', keys);
+    if(error){ console.error('resetAll error', error); Toast.show('error','No se pudo restablecer en la nube.'); }
     this.ensureDefaults();
   },
 
@@ -1128,10 +1222,23 @@ const ComprasView = {
     tbody.querySelectorAll('[data-del]').forEach(b=> b.onclick = ()=> this.remove(b.dataset.del));
   },
   remove(id){
-    Modal.confirm('¿Eliminar este registro de compra? El inventario no se recalculará automáticamente.', ()=>{
+    const compra = Store.getCompras().find(c=>c.id===id);
+    const mensaje = compra
+      ? `¿Eliminar este registro de compra? Se le quitará al inventario ${Utils.num(compra.cantidad,1)} ${compra.unidad} de "${compra.materialNombre}" (como si nunca se hubiera comprado). El costo promedio del material no se recalculará.`
+      : '¿Eliminar este registro de compra?';
+    Modal.confirm(mensaje, ()=>{
+      if(compra){
+        const inv = Store.getInventario();
+        const mat = inv.find(m=>m.id===compra.materialId) || Utils.findMaterial(inv, compra.materialNombre);
+        if(mat){
+          mat.cantidad = Math.max(0, Number(mat.cantidad) - Number(compra.cantidad||0));
+          Store.setInventario(inv);
+        }
+      }
       Store.setCompras(Store.getCompras().filter(c=>c.id!==id));
-      Toast.show('success','Compra eliminada.');
+      Toast.show('success','Compra eliminada y stock del inventario actualizado.');
       this.render();
+      this.populateDatalists();
       App.refreshBadges();
     });
   }
@@ -1480,8 +1587,8 @@ const FinanzasView = {
     document.getElementById('btnRespaldarJSON').onclick = ()=> Exporter.backupJSON();
     document.getElementById('inputImportarJSON').onchange = (e)=> Exporter.importJSON(e);
     document.getElementById('btnResetApp').onclick = ()=>{
-      Modal.confirm('Esto borrará TODOS los datos (inventario, compras, ventas, gastos y configuración). ¿Deseas continuar?', ()=>{
-        Store.resetAll();
+      Modal.confirm('Esto borrará TODOS los datos (inventario, compras, ventas, gastos y configuración) para TODOS los que usan la app. ¿Deseas continuar?', async ()=>{
+        await Store.resetAll();
         Toast.show('success','Aplicación restablecida.');
         App.renderCurrentView();
       }, 'Restablecer aplicación');
@@ -1770,8 +1877,10 @@ const Exporter = {
 /* ---------------------------------------------------------------------- */
 const App = {
   currentTab: 'dashboard',
-  init(){
-    Store.ensureDefaults();
+  async init(){
+    await Auth.init();          // espera a que haya sesión (login compartido)
+    await Store.init();         // trae inventario/ventas/etc. desde Supabase
+
     const cfg = Store.getConfig();
     this.applyTheme(cfg.tema);
     this.applyBrand(cfg.nombreNegocio);
@@ -1779,6 +1888,7 @@ const App = {
     this.bindNav();
     this.bindThemeToggle();
     this.bindMobileMenu();
+    this.bindLogout();
 
     DashboardView.init();
     NuevoTrabajoView.init();
@@ -1818,6 +1928,10 @@ const App = {
     document.getElementById('menuBtn').onclick = ()=>{
       document.getElementById('moreSheet').classList.toggle('open');
     };
+  },
+  bindLogout(){
+    const btn = document.getElementById('logoutBtn');
+    if(btn) btn.onclick = ()=> Auth.logout();
   },
   applyTheme(theme){
     document.documentElement.setAttribute('data-theme', theme==='light'?'light':'dark');

@@ -17,6 +17,25 @@
 <!-- ============ MODAL ROOT ============ -->
 <div id="modalRoot" class="modal-root"></div>
 
+<!-- ============ LOGIN OVERLAY ============ -->
+<div class="login-overlay" id="loginOverlay" style="display:none">
+  <form class="login-card" id="loginForm">
+    <img src="assets/icons/logo.png" alt="Logo" width="56" height="56">
+    <h2>KJ Concept</h2>
+    <p class="muted">Ingresa con la cuenta del negocio</p>
+    <div class="field">
+      <label>Correo</label>
+      <input type="email" id="loginEmail" required autocomplete="username">
+    </div>
+    <div class="field">
+      <label>Contraseña</label>
+      <input type="password" id="loginPassword" required autocomplete="current-password">
+    </div>
+    <p class="login-error" id="loginError"></p>
+    <button type="submit" class="btn btn-primary btn-lg" id="loginSubmit">Ingresar</button>
+  </form>
+</div>
+
 <!-- ============ APP SHELL ============ -->
 <div class="app-shell">
 
@@ -89,6 +108,7 @@
       <h1 class="topbar-title" id="topbarTitle">Dashboard</h1>
       <div class="topbar-actions">
         <button class="icon-btn" id="themeToggle" title="Cambiar tema">◐</button>
+        <button class="icon-btn" id="logoutBtn" title="Cerrar sesión">⏻</button>
       </div>
     </header>
 
@@ -508,6 +528,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

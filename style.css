@@ -579,3 +579,47 @@ textarea{ resize: vertical; font-family: inherit; }
   .export-grid{ grid-template-columns: 1fr; }
   .totals-strip{ grid-template-columns: 1fr 1fr; }
 }
+
+/* ==========================================================================
+   LOGIN OVERLAY — pantalla de inicio de sesión compartida (Supabase Auth)
+   ========================================================================== */
+.login-overlay{
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
+.login-card{
+  width: min(360px, 90vw);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 28px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  text-align: center;
+}
+.login-card img{ border-radius: var(--radius-sm); margin-bottom: 8px; }
+.login-card h2{
+  font-family: var(--font-display);
+  margin: 0;
+  color: var(--text);
+}
+.login-card .field{
+  width: 100%;
+  text-align: left;
+  margin-top: 14px;
+}
+.login-card .btn{ width: 100%; margin-top: 18px; }
+.login-error{
+  color: var(--danger);
+  font-size: 13px;
+  min-height: 16px;
+  margin: 6px 0 0;
+}
